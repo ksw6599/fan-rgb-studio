@@ -3,11 +3,21 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Diagnostics;
 using System.Windows.Media;
 
 namespace FanRgbStudio;
 
-public record RgbMode(string Name, int Index, uint Flags, byte[] Raw, int FieldsOffset, ushort Colors);
+public record RgbMode(string Name, int Index, uint Flags, byte[] Raw, int FieldsOffset, ushort Colors)
+{
+    public uint Field(int field)=>field is >=0 and <12&&Raw.Length>=FieldsOffset+48?BinaryPrimitives.ReadUInt32LittleEndian(Raw.AsSpan(FieldsOffset+field*4)):throw new InvalidDataException("RGB 효과 정보가 불완전합니다.");
+    public bool SupportsColor=>(Flags&0x20)!=0||((Flags&0x40)!=0&&Field(7)>0);
+    public bool SupportsSpeed=>(Flags&1)!=0&&Field(3)>Field(2);
+    public bool SupportsBrightness=>(Flags&0x10)!=0||SupportsColor;
+    public bool SupportsZoneColor=>(Flags&0x20)!=0&&(Flags&0x400)==0;
+    public bool IsSolid=>Name.Equals("Static",StringComparison.OrdinalIgnoreCase)||Name.Equals("Direct",StringComparison.OrdinalIgnoreCase);
+    public int DefaultSpeedPercent(bool active)=>SupportsSpeed&&active&&Field(8)>=Field(2)&&Field(8)<=Field(3)?(int)Math.Round((Field(8)-Field(2))*100.0/(Field(3)-Field(2))):50;
+}
 public record RgbZone(uint Index,string Name,int Type,uint Minimum,uint Maximum,uint Leds,int Start)
 {
     public bool Addressable=>Name.Contains("Addressable",StringComparison.OrdinalIgnoreCase)||Name.Contains("ARGB",StringComparison.OrdinalIgnoreCase);
@@ -35,12 +45,15 @@ public record RgbDevice(uint Index, string Name, string Vendor, string Serial, s
 public sealed class OpenRgbClient : IDisposable
 {
     private readonly TcpClient client = new();
+    private readonly Stopwatch elapsed=Stopwatch.StartNew();
+    private readonly TimeSpan budget;
     private NetworkStream stream = null!;
-    public OpenRgbClient(int port = 6742)
+    public OpenRgbClient(int port = 6742,TimeSpan? operationBudget=null)
     {
+        budget=operationBudget??TimeSpan.FromSeconds(20);
         try
         {
-            client.ConnectAsync(IPAddress.Loopback, port).WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
+            client.ConnectAsync(IPAddress.Loopback, port).WaitAsync(TimeSpan.FromMilliseconds(Math.Max(1,Math.Min(3000,budget.TotalMilliseconds)))).GetAwaiter().GetResult();
             stream = client.GetStream(); stream.ReadTimeout = 12000; stream.WriteTimeout = 4000;
             Send(0, 40, BitConverter.GetBytes(3u));
             var response = Receive(40);
@@ -53,17 +66,32 @@ public sealed class OpenRgbClient : IDisposable
     {
         using var buffer = new MemoryStream(); using var writer = new BinaryWriter(buffer);
         writer.Write(Encoding.ASCII.GetBytes("ORGB")); writer.Write(device); writer.Write(command); writer.Write((uint)payload.Length); writer.Write(payload);
-        stream.Write(buffer.ToArray());
+        stream.WriteTimeout=RemainingTimeout(4000);stream.Write(buffer.ToArray());
+    }
+    private int RemainingTimeout(int maximum)
+    {
+        var milliseconds=(budget-elapsed.Elapsed).TotalMilliseconds;
+        if(milliseconds<=0)throw new TimeoutException("RGB 엔진 응답 시간이 초과됐습니다. RGB 복구로 다시 연결해 주세요.");
+        return Math.Max(1,(int)Math.Min(maximum,milliseconds));
+    }
+    private void ReadBounded(Span<byte> buffer)
+    {
+        int offset=0;
+        while(offset<buffer.Length)
+        {
+            stream.ReadTimeout=RemainingTimeout(12000);
+            int read=stream.Read(buffer[offset..]);if(read==0)throw new EndOfStreamException("RGB 엔진 연결이 끊겼습니다.");offset+=read;
+        }
     }
     private byte[] Receive(uint expected, uint? device = null)
     {
         for (int attempts = 0; attempts < 32; attempts++)
         {
-            var header = new byte[16]; stream.ReadExactly(header);
+            var header = new byte[16]; ReadBounded(header);
             if (Encoding.ASCII.GetString(header, 0, 4) != "ORGB") throw new IOException("올바르지 않은 RGB 서버 응답입니다.");
             uint id = BitConverter.ToUInt32(header, 8), size = BitConverter.ToUInt32(header, 12);
             if (size > 4 * 1024 * 1024) throw new IOException("RGB 응답이 너무 큽니다.");
-            byte[] payload = new byte[size]; stream.ReadExactly(payload);
+            byte[] payload = new byte[size]; ReadBounded(payload);
             if (id == 100) throw new IOException("RGB 장치 목록이 변경되었습니다. 다시 검색해 주세요.");
             if (id == expected && (device == null || BitConverter.ToUInt32(header, 4) == device)) return payload;
         }
@@ -126,7 +154,7 @@ public sealed class OpenRgbClient : IDisposable
             throw new IOException("RGB LED 데이터가 올바르지 않습니다.");
         return new(index, name, vendor, serial, location, leds, modes,activeMode,currentColors,zoneList,deviceType);
     }
-    public RgbDevice Apply(RgbDevice expected, string modeName, Color color, int brightness,IReadOnlyList<uint>? zoneIds=null)
+    public RgbDevice Apply(RgbDevice expected, string modeName, Color color, int brightness,IReadOnlyList<uint>? zoneIds=null,int? speedPercent=null)
     {
         // Re-read identity before writing: never apply a stale index to a different device.
         var current = GetDevice(expected.Index);
@@ -149,32 +177,12 @@ public sealed class OpenRgbClient : IDisposable
         modeName=ZoneCompatibleMode(current,modeName,selected!=null);
         if(brightness<=0&&selected==null&&current.Modes.Any(m=>m.Name.Equals("Off",StringComparison.OrdinalIgnoreCase)))modeName=current.Modes.First(m=>m.Name.Equals("Off",StringComparison.OrdinalIgnoreCase)).Name;
         var mode = current.Modes.SingleOrDefault(m => m.Name == modeName) ?? throw new IOException("이 장치에서 제공하지 않는 효과입니다.");
-        if(selected!=null&&(mode.Flags&0x20)==0)throw new IOException("구역별 색상은 Static/Direct 같은 단색 모드를 선택해 주세요. 이 효과는 ‘장치 전체’에서 적용할 수 있습니다.");
-        brightness = Math.Clamp(brightness, 0, 100);
-        var raw = mode.Raw.ToArray(); int f = mode.FieldsOffset;
-        uint Read(int field) => BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(f + field * 4));
-        void Set(int field, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(f + field * 4), value);
-        bool hardwareBrightness = (mode.Flags & 0x10) != 0;
-        if(hardwareBrightness&&selected==null)Set(9,(uint)Math.Round(Read(4)+((double)Read(5)-Read(4))*brightness/100.0));
-        double scale = hardwareBrightness&&selected==null ? 1 : brightness / 100.0;
-        uint rgb = (uint)((int)(color.R * scale) | ((int)(color.G * scale) << 8) | ((int)(color.B * scale) << 16));
-        int modeColors = mode.Colors;
-        if ((mode.Flags & 0x40) != 0 && modeColors == 0 && Read(7) >= 1)
-        {
-            modeColors = checked((int)Math.Max(1u, Read(6)));
-            if (modeColors > 1024 || modeColors > Read(7)) throw new IOException("RGB 효과 색상 수 범위가 올바르지 않습니다.");
-            Array.Resize(ref raw, f + 50 + modeColors * 4);
-            BinaryPrimitives.WriteUInt16LittleEndian(raw.AsSpan(f + 48), (ushort)modeColors);
-        }
-        for (int i = 0; i < modeColors; i++) BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(f + 50 + i * 4), rgb);
-        if ((mode.Flags & 0x40) != 0) Set(11, 2); // MODE_COLORS_MODE_SPECIFIC
-        else if ((mode.Flags & 0x20) != 0) Set(11, 1); // MODE_COLORS_PER_LED
-        else Set(11,0); // Native rainbow/off modes do not accept a per-LED color mode.
-        if((mode.Flags&0xE)==0)Set(10,0);
+        var plan=RgbWritePlan.Build(mode,color,brightness,selected!=null,speedPercent);
+        var raw=plan.Raw;uint rgb=plan.PackedColor;
         using var buffer = new MemoryStream(); using var writer = new BinaryWriter(buffer);
         writer.Write((uint)(raw.Length + 8)); writer.Write(mode.Index); writer.Write(raw);
         Send(current.Index, 1101, buffer.ToArray());
-        if ((mode.Flags & 0x20) != 0 && current.Leds > 0)
+        if (plan.ColorMode==1 && current.Leds > 0)
         {
             if(selected==null)
             {
@@ -197,8 +205,9 @@ public sealed class OpenRgbClient : IDisposable
         {
             readback=GetDevice(current.Index);
             if(readback.Identity!=current.Identity)throw new IOException("RGB 장치가 변경되었습니다. 다시 검색해 주세요.");
-            bool colorsOk=(mode.Flags&0x20)==0||current.Leds==0||(selected==null?readback.CurrentColors?.All(c=>c==rgb)==true:selected.All(z=>readback.CurrentColors?.Skip(z.Start).Take((int)z.Leds).Count(c=>c==rgb)==z.Leds));
-            accepted=readback.ActiveMode==mode.Index&&colorsOk;if(accepted)break;
+            bool colorsOk=plan.ColorMode!=1||current.Leds==0||(selected==null?readback.CurrentColors?.All(c=>c==rgb)==true:selected.All(z=>readback.CurrentColors?.Skip(z.Start).Take((int)z.Leds).Count(c=>c==rgb)==z.Leds));
+            bool modeValuesOk=readback.Modes.Any(m=>m.Index==mode.Index&&m.Name==mode.Name&&plan.Matches(m));
+            accepted=readback.ActiveMode==mode.Index&&colorsOk&&modeValuesOk;if(accepted)break;
             Thread.Sleep(150);
         }
         if(!accepted)throw new IOException("RGB 엔진이 선택한 효과/구역 색상을 반영하지 않았습니다. 다시 연결해 주세요.");

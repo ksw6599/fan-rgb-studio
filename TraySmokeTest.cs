@@ -22,6 +22,22 @@ public static class TraySmokeTest
             Check(worker.HasValue,"worker process is running");
             Check(!window.IsVisible&&!window.ShowInTaskbar&&window.TrayVisible,"background startup hides window and keeps tray icon");
             window.ShowSettings();Check(window.IsVisible&&window.ShowInTaskbar,"settings window restores from tray");
+            for(int n=0;n<40&&window.RgbWorkPending;n++)await Task.Delay(100);
+            Check(!window.RgbWorkPending,"read-only discovery finishes before RGB UI fixtures are edited");
+            RgbDevice RgbUiFixture(RgbMode effect)=>new(0,"UI fixture","Test","test","test:unavailable",2,[effect],0,[0x112233,0x445566],[new(0,"Addressable Header",1,1,2,2,0)],0);
+            window.PreviewRgbForTest(RgbUiFixture(SelfTests.ModeFixture("Rainbow",1,(2,10),(3,90),(8,0))));
+            var colorPanel=(StackPanel)window.FindName("RgbColorEditor");var speedPanel=(StackPanel)window.FindName("RgbSpeedPanel");var speed=(Slider)window.FindName("RgbSpeedSlider");var zones=(ComboBox)window.FindName("RgbZones");
+            Check(!colorPanel.IsEnabled&&speedPanel.Visibility==Visibility.Visible&&speed.Value==50,"automatic-color effect disables HEX and exposes a valid speed");
+            Check(!zones.IsEnabled&&(zones.SelectedItem as RgbZoneChoice)?.Key=="all","automatic effect uses whole-device scope");
+            Check(((TextBlock)window.FindName("RgbCapabilityText")).Text.Contains("자동 색상"),"effect limitations are explained in the UI");
+            Check(((Button)window.FindName("RestartRgbEffectButton")).IsEnabled&&((Button)window.FindName("RecoverRgbButton")).IsEnabled&&((Button)window.FindName("ExportRgbButton")).IsEnabled,"restart, recovery and diagnostics controls are available");
+            await window.Dispatcher.InvokeAsync(()=>{},System.Windows.Threading.DispatcherPriority.Render);
+            CaptureVisual((FrameworkElement)window.FindName("RgbPanel"),Path.ChangeExtension(output,"rgb-native.png"));
+            window.PreviewRgbForTest(RgbUiFixture(SelfTests.ModeFixture("Static",0x20,(11,1))));
+            Check(colorPanel.IsEnabled&&speedPanel.Visibility==Visibility.Collapsed,"solid effect enables HEX and hides unsupported speed");
+            window.PreviewRgbForTest(RgbUiFixture(SelfTests.ModeFixture("Whole device",0x420,(11,1))));
+            Check(!zones.IsEnabled&&(zones.SelectedItem as RgbZoneChoice)?.Key=="all","entire-device capability disables partial header selection");
+            Check(window.WorkerProcessId==worker,"RGB controls do not replace the fan worker");
             var mode=(ComboBox)window.FindName("FanMode");var slider=(Slider)window.FindName("ManualSlider");
             var editor=(WrapPanel)window.FindName("ManualEditor");var number=(TextBox)window.FindName("ManualValueInput");
             var oldMode=mode.SelectedIndex;var oldValue=slider.Value;mode.SelectedIndex=3;
@@ -60,7 +76,7 @@ public static class TraySmokeTest
             window.Close();Check(!window.IsVisible&&!window.IsStopping&&window.TrayVisible,"X close hides instead of shutting down");
             await Task.Delay(2500);
             Check(window.WorkerProcessId==worker&&window.LastSensorFrame>before,"same worker and heartbeats continue while hidden");
-            var launch=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=false,CreateNoWindow=true};launch.ArgumentList.Add("--show");
+            var launch=new ProcessStartInfo(Environment.ProcessPath!){UseShellExecute=false,CreateNoWindow=true};launch.ArgumentList.Add("--smoke-peer");
             using(var second=Process.Start(launch)!){await second.WaitForExitAsync();Check(second.ExitCode==0,"second launch sends a restore signal and exits");}
             for(int n=0;n<20&&!window.IsVisible;n++)await Task.Delay(100);
             Check(window.IsVisible&&window.WorkerProcessId==worker,"second launch restores existing window without replacing worker");
@@ -78,5 +94,17 @@ public static class TraySmokeTest
             File.WriteAllText(output,JsonSerializer.Serialize(new{Success,Checks=checks,WorkerPid=worker,HardwareWrites=false},new JsonSerializerOptions{WriteIndented=true}));
             if(!window.IsStopping)window.RequestExit();
         }
+    }
+    private static void CaptureVisual(FrameworkElement source,string path)
+    {
+        double width=Math.Ceiling(source.ActualWidth),height=Math.Ceiling(source.ActualHeight);
+        var drawing=new System.Windows.Media.DrawingVisual();
+        using(var context=drawing.RenderOpen())
+        {
+            var brush=new System.Windows.Media.VisualBrush(source){ViewboxUnits=System.Windows.Media.BrushMappingMode.Absolute,Viewbox=new Rect(0,0,width,height),Stretch=System.Windows.Media.Stretch.Fill};
+            context.DrawRectangle(brush,null,new Rect(0,0,width,height));
+        }
+        var bitmap=new System.Windows.Media.Imaging.RenderTargetBitmap((int)width,(int)height,96,96,System.Windows.Media.PixelFormats.Pbgra32);bitmap.Render(drawing);
+        var encoder=new System.Windows.Media.Imaging.PngBitmapEncoder();encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));using var file=File.Create(path);encoder.Save(file);
     }
 }

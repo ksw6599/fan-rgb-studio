@@ -10,8 +10,11 @@
 !/docs/UPDATING.md
 !/docs/DEVELOPMENT.md
 !/docs/HARDWARE.md
+!/docs/RGB.md
 !/docs/test-results-v160.txt
 !/docs/tray-test-v160.json
+!/docs/test-results-v170.txt
+!/docs/tray-test-v170.json
 *.zip
 *.pdb
 *.user

@@ -23,7 +23,7 @@ Copy-Item -LiteralPath (Join-Path $projectDir 'tools\PawnIO_setup.exe'),(Join-Pa
 Copy-Item -LiteralPath (Join-Path $projectDir 'README.md'),(Join-Path $projectDir 'THIRD-PARTY-NOTICES.txt'),(Join-Path $projectDir 'LICENSE') -Destination $outputDir -Force
 Get-ChildItem -LiteralPath $projectDir -Filter '*.html' -File | Copy-Item -Destination $outputDir -Force
 Copy-Item -Path (Join-Path $projectDir 'licenses\*') -Destination (Join-Path $outputDir 'licenses') -Force
-foreach ($name in 'GETTING_STARTED.md','UPDATING.md','HARDWARE.md') {
+foreach ($name in 'GETTING_STARTED.md','UPDATING.md','HARDWARE.md','RGB.md') {
     Copy-Item -LiteralPath (Join-Path $projectDir ('docs\' + $name)) -Destination (Join-Path $outputDir 'docs') -Force
 }
 if (-not $SkipTests) {

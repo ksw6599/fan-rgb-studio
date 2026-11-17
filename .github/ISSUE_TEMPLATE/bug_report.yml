@@ -24,6 +24,11 @@ body:
         - 일반 권한 실행
         - 잘 모르겠음
   - type: textarea
+    id: rgb
+    attributes:
+      label: RGB 장치·효과·속도 또는 RGB 진단 (선택)
+      description: v1.7.0의 RGB 진단 저장으로 만든 파일을 첨부할 수 있습니다. 색상 고정 문제인지, 움직이는 효과가 멈추는지도 알려 주세요.
+  - type: textarea
     id: problem
     attributes:
       label: 화면 안내 문구와 재현 순서

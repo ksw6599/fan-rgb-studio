@@ -27,7 +27,7 @@ ZIP 바로 다운로드 주소:
 
 1. 코드를 수정합니다.
 2. `FanRgbStudio.csproj`의 `<Version>`을 올립니다. 예: `1.6.0` → `1.6.1`.
-3. 화면 버전과 `CHANGELOG.md`에도 반영하고 `main`에 커밋합니다.
+3. `CHANGELOG.md`에도 반영하고 `main`에 커밋합니다. 화면 버전은 프로젝트 버전에서 자동 표시됩니다.
 4. **Build and test** 검사 결과를 확인합니다.
 5. 저장소 → **Actions → Publish release → Run workflow**에서 `main`으로 실행합니다.
 6. 빌드·검사 성공 후 새 태그·릴리스, ZIP, SHA256SUMS가 생성됩니다. 같은 버전이 이미 있으면 실패하므로 버전을 올려야 합니다.

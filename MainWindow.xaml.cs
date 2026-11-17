@@ -37,10 +37,15 @@ public partial class MainWindow : Window
     private DateTime nextLegacyAttempt=DateTime.MinValue,legacyDeadline=DateTime.UtcNow.AddMinutes(2);
     private readonly List<string> rgbRestoreEvents=[];
     private readonly System.Collections.ObjectModel.ObservableCollection<CurveEditorRow> curveRows=[];
+    private readonly System.Threading.SemaphoreSlim rgbGate=new(1,1);
+    private bool rgbConnectionHealthy,rgbRestoreSuspended;
+    private string? lastRgbError;
     public MainWindow(bool startDisplay=false,bool startBackground=false,string? resumeFile=null,bool startRgb=false,bool restoreFans=true)
     {
         InitializeComponent();
+        VersionText.Text=$"v{AppFiles.Version} · LOCAL ONLY";
         this.restoreFans=restoreFans;
+        if(!restoreFans)Title="Fan Studio · UI test (no hardware writes)";
         resumeSession=FanSession.Load(resumeFile);
         var prefs = AppFiles.Load(); savedEffect = prefs.Effect;
         CustomCurveGrid.ItemsSource=curveRows;
@@ -93,6 +98,7 @@ public partial class MainWindow : Window
             }
         };
         Closing += OnClosing;
+        UpdateRgbControls();
         Closed+=(_,_)=>{tray.Dispose();WriteRuntimeStatus();};
     }
     protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
@@ -121,13 +127,15 @@ public partial class MainWindow : Window
     internal bool IsStopping=>closing;
     internal DateTime LastSensorFrame=>lastFrame;
     internal int? WorkerProcessId=>worker is{HasExited:false}?worker.Id:null;
+    internal bool RgbWorkPending=>rgbBusy||rgbRefreshing;
     private void WriteRuntimeStatus()
     {
+        if(!restoreFans)return;
         try
         {
             Directory.CreateDirectory(AppFiles.Data);
             var path=System.IO.Path.Combine(AppFiles.Data,"runtime-status.json");
-            File.WriteAllText(path+".tmp",JsonSerializer.Serialize(new{Pid=Environment.ProcessId,Version="1.6.0",Timestamp=DateTime.UtcNow,Visible=IsVisible,ShowInTaskbar,TrayVisible=tray.Visible,WorkerPid=WorkerProcessId,SensorTimestamp=latest?.Timestamp,DisplayRunning=coolerDisplay?.Running==true,Stopping=closing,RgbEnginePid=rgbEngine is{HasExited:false}?rgbEngine.Id:(int?)null,RgbDevices=(RgbDevices.ItemsSource as List<RgbDevice>)?.Select(d=>d.Name).ToArray(),CaseFanHeadersDetected=(RgbDevices.ItemsSource as List<RgbDevice>)?.Any(d=>d.HasCaseFanHeaders)==true,SelectedRgbZone=(RgbZones.SelectedItem as RgbZoneChoice)?.Key,RgbRestorePending=rgbRestore.PendingCount,RgbRestoreCompleted=rgbRestore.CompletedCount,RgbRestoreStatus=rgbRestore.Status,RgbRestoreEvents=rgbRestoreEvents.ToArray()},new JsonSerializerOptions{WriteIndented=true}));
+            File.WriteAllText(path+".tmp",JsonSerializer.Serialize(new{Pid=Environment.ProcessId,Version=AppFiles.Version,Timestamp=DateTime.UtcNow,Visible=IsVisible,ShowInTaskbar,TrayVisible=tray.Visible,WorkerPid=WorkerProcessId,SensorTimestamp=latest?.Timestamp,DisplayRunning=coolerDisplay?.Running==true,Stopping=closing,RgbEnginePid=rgbEngine is{HasExited:false}?rgbEngine.Id:(int?)null,RgbDevices=(RgbDevices.ItemsSource as List<RgbDevice>)?.Select(d=>d.Name).ToArray(),CaseFanHeadersDetected=(RgbDevices.ItemsSource as List<RgbDevice>)?.Any(d=>d.HasCaseFanHeaders)==true,SelectedRgbZone=(RgbZones.SelectedItem as RgbZoneChoice)?.Key,RgbRestorePending=rgbRestore.PendingCount,RgbRestoreCompleted=rgbRestore.CompletedCount,RgbRestoreStatus=rgbRestore.Status,RgbRestoreSuspended=rgbRestoreSuspended,RgbConnected=rgbConnectionHealthy,RgbLastError=lastRgbError,RgbRestoreEvents=rgbRestoreEvents.ToArray()},new JsonSerializerOptions{WriteIndented=true}));
             File.Move(path+".tmp",path,true);lastRuntimeStatus=DateTime.UtcNow;
         }
         catch(Exception ex){AppFiles.Log("RUNTIME STATUS "+ex.Message);}
@@ -205,7 +213,7 @@ public partial class MainWindow : Window
         }
         ApplyFanButton.IsEnabled = snapshot.Admin && snapshot.Controls.Count > 0 && cpu != null;
         FanNotice.Text = !LibreHardwareMonitor.PawnIo.PawnIo.IsInstalled ? "첫 사용: 왼쪽 ‘센서 드라이버 설치’ 후 ‘관리자로 다시 열기’를 눌러 주세요." : !snapshot.Admin ? "팬 제어에는 관리자 권한이 필요합니다. 왼쪽 ‘관리자로 다시 열기’를 사용하세요." : cpu == null ? "CPU 온도 미감지: 팬 제어를 잠갔습니다. PawnIO 설치 여부를 설명서에서 확인하세요." : snapshot.Notice;
-        try { Directory.CreateDirectory(AppFiles.Data); File.WriteAllText(System.IO.Path.Combine(AppFiles.Data, "latest-diagnostics.json"), JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true })); } catch { }
+        if(restoreFans)try { Directory.CreateDirectory(AppFiles.Data); File.WriteAllText(System.IO.Path.Combine(AppFiles.Data, "latest-diagnostics.json"), JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true })); } catch { }
     }
     private string SelectedFanMode => (FanMode?.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "균형";
     private void FanMode_Changed(object sender, SelectionChangedEventArgs e)
@@ -314,63 +322,116 @@ public partial class MainWindow : Window
     private void Restore_Click(object sender, RoutedEventArgs e) { Send(new("restore")); FanNotice.Text = "이 앱이 제어하던 팬을 기본 제어로 돌리는 중입니다…"; }
     private async Task RefreshRgb()
     {
-        if(rgbRefreshing||closing)return;rgbRefreshing=true;
+        if(rgbRefreshing||closing)return;rgbRefreshing=true;UpdateRgbControls();
         string identity=(RgbDevices.SelectedItem as RgbDevice)?.Identity??savedRgbIdentity;
         var pendingCalibration=RgbDevices.SelectedItem is RgbDevice?CurrentCalibration:null;
         string effect=(RgbEffects.SelectedItem as RgbMode)?.Name??savedEffect;
+        int? pendingSpeed=(RgbEffects.SelectedItem as RgbMode)?.SupportsSpeed==true?(int)RgbSpeedSlider.Value:null;
         string zone=(RgbZones.SelectedItem as RgbZoneChoice)?.Key??(string.IsNullOrEmpty(savedRgbIdentity)?"":savedRgbZone);
         try
         {
-            var devices = await Task.Run(() => { using var client = new OpenRgbClient(); return client.Devices(); });
+            var devices = await RgbAsync(() => { using var client = new OpenRgbClient(); return client.Devices(); });
+            rgbConnectionHealthy=true;lastRgbError=null;
             RgbDevices.ItemsSource = devices;
             RgbDevices.SelectedItem=devices.FirstOrDefault(d=>d.Identity==identity)??devices.FirstOrDefault(d=>d.HasCaseFanHeaders)??devices.FirstOrDefault();
             if(RgbDevices.SelectedItem is RgbDevice selected)
             {
                 if(selected.Identity==identity&&pendingCalibration!=null){RedGain.Value=pendingCalibration.Red;GreenGain.Value=pendingCalibration.Green;BlueGain.Value=pendingCalibration.Blue;}
                 if(selected.Modes.FirstOrDefault(m=>m.Name==effect) is {} mode)RgbEffects.SelectedItem=mode;
+                if(selected.Identity==identity&&pendingSpeed!=null&&(RgbEffects.SelectedItem as RgbMode)?.Name==effect)RgbSpeedSlider.Value=pendingSpeed.Value;
                 if(RgbZones.ItemsSource is List<RgbZoneChoice> choices&&choices.FirstOrDefault(c=>c.Key==zone) is {} choice)RgbZones.SelectedItem=choice;
             }
             CaseFanButton.IsEnabled=devices.Any(d=>d.HasCaseFanHeaders);
-            RgbNotice.Text=devices.Any(d=>d.HasCaseFanHeaders)?$"{devices.Count}개 장치 연결됨 · ‘시스템 팬 조명 선택’에서 메인보드 ARGB를 고르세요.":"메인보드 RGB가 감지되지 않았어요. Windows의 RGB USB 연결 오류인지 확인이 필요합니다.";
+            RgbNotice.Text=devices.Count==0?"RGB 엔진은 연결됐지만 지원 장치가 감지되지 않았어요. 다른 RGB 프로그램과 장치 지원 여부를 확인해 주세요.":$"{devices.Count}개 장치 연결됨 · 장치와 효과를 선택하세요.";
             ConnectRgbButton.Content = "다시 검색";
         }
-        catch (Exception ex) { RgbDevices.ItemsSource = null; ApplyRgbButton.IsEnabled = false;CaseFanButton.IsEnabled=false; RgbNotice.Text = "RGB 엔진 연결 대기 · ‘RGB 연결’을 눌러 시작하세요."; AppFiles.Log("RGB " + ex.Message); }
-        finally{rgbRefreshing=false;lastRgbRefresh=DateTime.UtcNow;}
+        catch (Exception ex) { rgbConnectionHealthy=false;lastRgbError=ex.Message;RgbNotice.Text = "RGB 연결 실패: "+ex.Message+" · RGB 복구로 다시 연결할 수 있습니다."; AppFiles.Log("RGB " + ex.Message); }
+        finally{rgbRefreshing=false;lastRgbRefresh=DateTime.UtcNow;UpdateRgbControls();}
     }
+    private async Task<T> RgbAsync<T>(Func<T> operation)
+    {await rgbGate.WaitAsync();try{return await Task.Run(operation);}finally{rgbGate.Release();}}
     private async void ConnectRgb_Click(object sender, RoutedEventArgs e)
     {
-        if (rgbBusy) return; rgbBusy = true; ConnectRgbButton.IsEnabled = false;
+        if (rgbBusy||rgbRefreshing) return; rgbBusy = true; UpdateRgbControls();
         try
         {
-            bool connected = await Task.Run(() => { try { using var c = new OpenRgbClient(); c.Devices(); return true; } catch { return false; } });
+            bool connected = await RgbAsync(() => { try { using var c = new OpenRgbClient(); c.Devices(); return true; } catch { return false; } });
             if (!connected)
             {
                 var path = System.IO.Path.Combine(AppContext.BaseDirectory, "tools", "OpenRGB", "OpenRGB.exe");
                 if (!File.Exists(path)) throw new FileNotFoundException("OpenRGB 엔진이 없습니다. 배포 폴더 전체를 함께 옮겨 주세요.", path);
-                if (rgbEngine is { HasExited: false }) { RgbNotice.Text = "RGB 엔진이 아직 장치를 검색하고 있습니다. 잠시 뒤 다시 검색해 주세요."; return; }
+                if (rgbEngine is { HasExited: false }) { RgbNotice.Text = "RGB 엔진이 응답하지 않아요. ‘RGB 복구’로 이 앱의 엔진만 다시 시작할 수 있습니다.";rgbConnectionHealthy=false; return; }
+                if(System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Any(p=>p.Port==6742))throw new IOException("다른 RGB 엔진이 응답하지 않습니다. 해당 프로그램에서 엔진을 다시 시작한 뒤 연결해 주세요.");
                 Directory.CreateDirectory(System.IO.Path.Combine(AppFiles.Data, "OpenRGB"));
                 var start = new ProcessStartInfo(path) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = System.IO.Path.GetDirectoryName(path)!, RedirectStandardOutput = true, RedirectStandardError = true };
                 foreach (string arg in new[] { "--server", "--server-host", "127.0.0.1", "--server-port", "6742", "--noautoconnect", "--config", System.IO.Path.Combine(AppFiles.Data, "OpenRGB") }) start.ArgumentList.Add(arg);
-                rgbEngine = new Process { StartInfo = start };
-                rgbEngine.OutputDataReceived += (_, data) => { if (data.Data != null) AppFiles.Log("OPENRGB " + data.Data); };
-                rgbEngine.ErrorDataReceived += (_, data) => { if (data.Data != null) AppFiles.Log("OPENRGB " + data.Data); };
-                rgbEngine.Start(); rgbEngine.BeginOutputReadLine(); rgbEngine.BeginErrorReadLine();
-                RgbNotice.Text = "실제 RGB 장치 검색 중… 최대 30초 정도 기다려 주세요.";
-                for (int i = 0; i < 15 && !closing; i++)
+                var engine = new Process { StartInfo = start };
+                engine.OutputDataReceived += (_, data) => { if (data.Data != null) AppFiles.Log("OPENRGB " + data.Data); };
+                engine.ErrorDataReceived += (_, data) => { if (data.Data != null) AppFiles.Log("OPENRGB " + data.Data); };
+                try{engine.Start();}catch{engine.Dispose();throw;}
+                rgbEngine?.Dispose();rgbEngine=engine;engine.BeginOutputReadLine();engine.BeginErrorReadLine();
+                RgbNotice.Text = "RGB 엔진을 시작하고 장치를 검색하고 있어요…";
+                var startupWatch=Stopwatch.StartNew();bool engineReady=false;
+                for (int i = 0; i < 30 && !closing && startupWatch.Elapsed<TimeSpan.FromSeconds(30); i++)
                 {
-                    await Task.Delay(2000);
-                    bool ready = await Task.Run(() => { try { using var c = new OpenRgbClient(); return true; } catch { return false; } });
-                    if (ready) break;
+                    await Task.Delay(1000);
+                    bool ready = await RgbAsync(() => { try { using var c = new OpenRgbClient(operationBudget:TimeSpan.FromSeconds(1)); return true; } catch { return false; } });
+                    if (ready){engineReady=true;break;}
+                    if(rgbEngine.HasExited)throw new IOException("RGB 엔진이 종료됐습니다. 다른 OpenRGB 실행 여부와 진단 로그를 확인해 주세요.");
                 }
+                if(!engineReady&&!closing)throw new TimeoutException("RGB 엔진이 시작 시간 안에 응답하지 않았어요. RGB 복구 또는 진단 저장을 사용해 주세요.");
             }
             if (!closing) await RefreshRgb();
         }
-        catch (Exception ex) { RgbNotice.Text = ex.Message; AppFiles.Log(ex.ToString()); }
+        catch (Exception ex) { rgbConnectionHealthy=false;lastRgbError=ex.Message;RgbNotice.Text = ex.Message; AppFiles.Log(ex.ToString()); }
         finally
         {
             rgbBusy = false;
-            if (!closing){ConnectRgbButton.IsEnabled = true;if(restoreFans&&rgbRestore.PendingCount==0&&rgbProfiles.Devices.Count>0)rgbRestore=new(rgbProfiles,DateTime.UtcNow);}
+            if (!closing)UpdateRgbControls();
         }
+    }
+    private async void RecoverRgb_Click(object sender,RoutedEventArgs e)
+    {
+        if(rgbBusy||rgbRefreshing)return;
+        rgbBusy=true;rgbRestoreSuspended=true;legacyRgb=null;rgbRestore=new(RgbProfiles.Empty,DateTime.UtcNow);UpdateRgbControls();
+        bool external=rgbEngine is not{HasExited:false}&&System.Net.NetworkInformation.IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Any(p=>p.Port==6742);
+        try
+        {
+            if(!external&&rgbEngine is{HasExited:false} owned)
+            {
+                await RgbAsync(()=>{if(!owned.HasExited){owned.Kill();if(!owned.WaitForExit(4000))throw new IOException("RGB 엔진 종료 대기 시간이 초과됐습니다.");}return true;});
+                owned.Dispose();rgbEngine=null;
+            }
+        }
+        catch(Exception ex){lastRgbError=ex.Message;RgbNotice.Text="RGB 복구 실패: "+ex.Message;return;}
+        finally{rgbBusy=false;UpdateRgbControls();}
+        if(external)
+        {
+            await RefreshRgb();RgbNotice.Text="외부 RGB 엔진은 강제 종료하지 않았어요. 엔진을 실행한 프로그램에서 다시 시작하거나 효과를 다시 적용해 주세요.";return;
+        }
+        RgbNotice.Text="RGB 엔진만 다시 연결합니다. 팬 속도·쿨러 숫자 전송은 유지합니다.";
+        ConnectRgb_Click(sender,e);
+    }
+    private void RestoreRgb_Click(object sender,RoutedEventArgs e)
+    {
+        if(rgbBusy||rgbRefreshing)return;
+        try{rgbProfiles=RgbProfileStore.Default.Load();rgbRestore=new(rgbProfiles,DateTime.UtcNow);rgbRestoreSuspended=false;RgbRestoreNotice.Text="저장된 조명 재적용을 요청했어요.";ConnectRgb_Click(sender,e);}
+        catch(Exception ex){lastRgbError=ex.Message;RgbRestoreNotice.Text="저장 설정 읽기 실패: "+ex.Message;}
+    }
+    private async void ExportRgb_Click(object sender,RoutedEventArgs e)
+    {
+        if(rgbBusy||rgbRefreshing)return;rgbBusy=true;UpdateRgbControls();
+        try
+        {
+            var devices=(RgbDevices.ItemsSource as List<RgbDevice>)??[];
+            try{devices=await RgbAsync(()=>{using var client=new OpenRgbClient();return client.Devices();});}
+            catch(Exception ex){lastRgbError=ex.Message;}
+            var path=System.IO.Path.Combine(AppFiles.Data,"rgb-diagnostics.json");
+            RgbDiagnostics.Save(path,devices,rgbEngine is{HasExited:false}?"app-owned":"external or disconnected",lastRgbError);
+            RgbNotice.Text="RGB 진단을 저장했어요. 왼쪽 ‘진단 폴더 열기’의 rgb-diagnostics.json을 보내 주세요. 사용자 이름·USB 경로·시리얼 번호는 포함하지 않습니다.";
+        }
+        catch(Exception ex){RgbNotice.Text="진단 저장 실패: "+ex.Message;}
+        finally{rgbBusy=false;UpdateRgbControls();}
     }
     private void RememberRgb(RgbDevice device,SavedRgbSetting setting)
     {
@@ -380,17 +441,17 @@ public partial class MainWindow : Window
     }
     private async Task RestoreRgbIfDueAsync()
     {
-        if(closing||rgbBusy)return;
+        if(closing||rgbBusy||rgbRefreshing||rgbRestoreSuspended)return;
         var now=DateTime.UtcNow;
         if(legacyRgb!=null&&now>=legacyDeadline){AppFiles.Log("RGB legacy migration timed out");legacyRgb=null;RgbRestoreNotice.Text="저장된 조명의 장치 감지 시간 초과 · RGB 연결로 다시 시도하세요.";if(rgbRestore.PendingCount==0)return;}
         var request=rgbRestore.Due(now);
         if(request==null&&(legacyRgb==null||now<nextLegacyAttempt)){if(legacyRgb==null)RgbRestoreNotice.Text=rgbRestore.Status;return;}
-        rgbBusy=true;ApplyRgbButton.IsEnabled=false;ConnectRgbButton.IsEnabled=false;
+        rgbBusy=true;UpdateRgbControls();
         try
         {
             if(legacyRgb is {} legacy)
             {
-                var migrated=await Task.Run(()=>
+                var migrated=await RgbAsync(()=>
                 {
                     using var client=new OpenRgbClient();var device=client.Devices().SingleOrDefault(d=>d.Identity==legacy.RgbIdentity)??throw new IOException("저장된 RGB 장치 감지 대기 중");
                     return (Device:device,Setting:SavedRgbSetting.Capture(device,legacy.RgbZone,legacy.Effect,legacy.Color,legacy.Brightness,legacy.RgbCalibrations?.GetValueOrDefault(device.Identity)??new()));
@@ -402,7 +463,7 @@ public partial class MainWindow : Window
             }
             if(request==null)return;
             var target=request;lastRgbWrite=DateTime.UtcNow;
-            await Task.Run(()=>{using var client=new OpenRgbClient();target.Apply(client);});
+            await RgbAsync(()=>{using var client=new OpenRgbClient();target.Apply(client);return true;});
             if(closing)return;
             await Task.Delay(1500);
             rgbRestore.Succeeded(target.Identity,DateTime.UtcNow);
@@ -411,14 +472,15 @@ public partial class MainWindow : Window
         }
         catch(Exception ex)
         {
-            if(request!=null)rgbRestore.Failed(request.Identity,DateTime.UtcNow,ex.Message);
+            lastRgbError=ex.Message;
+            if(request!=null)rgbRestore.Failed(request.Identity,DateTime.UtcNow,ex.Message,ex is not InvalidDataException);
             else nextLegacyAttempt=DateTime.UtcNow.AddSeconds(5);
             AppFiles.Log("RGB AUTO RESTORE retry "+ex.Message);
         }
         finally
         {
             rgbBusy=false;
-            if(!closing){ApplyRgbButton.IsEnabled=RgbDevices.SelectedItem is RgbDevice;ConnectRgbButton.IsEnabled=true;RgbRestoreNotice.Text=legacyRgb!=null?"기존 조명 설정의 장치 감지 대기 중 · 자동 재시도":rgbRestore.Status;WriteRuntimeStatus();}
+            if(!closing){UpdateRgbControls();RgbRestoreNotice.Text=legacyRgb!=null?"기존 조명 설정의 장치 감지 대기 중 · 자동 재시도":rgbRestore.Status;WriteRuntimeStatus();}
         }
     }
     private void RgbDevice_Changed(object sender, SelectionChangedEventArgs e)
@@ -428,8 +490,14 @@ public partial class MainWindow : Window
         if(RedGain!=null){var correction=device!=null&&calibrations.TryGetValue(device.Identity,out var saved)?saved:new();RedGain.Value=correction.Red;GreenGain.Value=correction.Green;BlueGain.Value=correction.Blue;}
         if(RgbZones!=null){RgbZones.ItemsSource=device!=null?RgbZoneChoice.For(device):null;RgbZones.SelectedIndex=device?.HasCaseFanHeaders==true?1:0;}
         RgbEffects.SelectedItem = device?.Modes.FirstOrDefault(m => m.Name == savedEffect && m.Name!="Off") ?? PreferredSolid(device) ?? device?.Modes.FirstOrDefault(m=>m.Name!="Off");
-        ApplyRgbButton.IsEnabled = device?.Modes.Count > 0;
-        SolidRgbButton.IsEnabled=PreferredSolid(device)!=null;
+        if(device!=null&&!rgbRefreshing&&rgbProfiles.Devices.FirstOrDefault(d=>d.Identity==device.Identity)?.Settings.LastOrDefault() is {} stored)
+        {
+            ColorInput.Text=stored.Color;BrightnessSlider.Value=stored.Brightness;
+            if(device.Modes.FirstOrDefault(m=>m.Name==stored.Mode) is{} restoredMode)RgbEffects.SelectedItem=restoredMode;
+            if(RgbZones?.ItemsSource is List<RgbZoneChoice> savedZones)RgbZones.SelectedItem=savedZones.FirstOrDefault(z=>z.Key==stored.Zone)??savedZones[0];
+            if(stored.SpeedPercent!=null)RgbSpeedSlider.Value=stored.SpeedPercent.Value;
+        }
+        UpdateRgbControls();
     }
     private void CaseFan_Click(object sender,RoutedEventArgs e)
     {
@@ -439,12 +507,48 @@ public partial class MainWindow : Window
         if(RgbZones.ItemsSource is List<RgbZoneChoice> choices)RgbZones.SelectedItem=choices.FirstOrDefault(c=>c.Key=="argb");
         RgbNotice.Text="시스템 팬용 ARGB 헤더를 선택했어요. 색상·밝기를 고르고 ‘조명 설정 적용’을 누르세요.";
     }
-    private static RgbMode? PreferredSolid(RgbDevice? device)=>device?.Modes.FirstOrDefault(m=>m.Name.Equals("Static",StringComparison.OrdinalIgnoreCase))??device?.Modes.FirstOrDefault(m=>m.Name.Equals("Direct",StringComparison.OrdinalIgnoreCase));
+    private static RgbMode? PreferredSolid(RgbDevice? device)=>device?.Modes.FirstOrDefault(m=>m.Name.Equals("Static",StringComparison.OrdinalIgnoreCase)&&m.SupportsColor)??device?.Modes.FirstOrDefault(m=>m.Name.Equals("Direct",StringComparison.OrdinalIgnoreCase)&&m.SupportsColor);
     private void RgbEffect_Changed(object sender,SelectionChangedEventArgs e)
     {
-        if(RgbZones==null)return;
-        bool perLed=RgbEffects.SelectedItem is RgbMode mode&&(mode.Flags&0x20)!=0;RgbZones.IsEnabled=perLed;
+        if(RgbZones==null||RgbSpeedSlider==null)return;
+        var mode=RgbEffects.SelectedItem as RgbMode;bool perLed=mode?.SupportsZoneColor==true;
         if(!perLed&&RgbZones.ItemsSource is List<RgbZoneChoice> choices)RgbZones.SelectedItem=choices.First(c=>c.Key=="all");
+        if(mode!=null&&mode.SupportsSpeed)RgbSpeedSlider.Value=mode.DefaultSpeedPercent((RgbDevices.SelectedItem as RgbDevice)?.ActiveMode==mode.Index);
+        UpdateRgbControls();
+    }
+    private void RgbSpeed_Changed(object sender,RoutedPropertyChangedEventArgs<double> e){if(RgbSpeedLabel!=null)RgbSpeedLabel.Text=$"효과 속도 {e.NewValue:F0}%";}
+    private int? CurrentRgbSpeed=>(RgbEffects.SelectedItem as RgbMode)?.SupportsSpeed==true?(int)RgbSpeedSlider.Value:null;
+    private void RestartRgbEffect_Click(object sender,RoutedEventArgs e)
+    {
+        if(RgbEffects.SelectedItem is not RgbMode mode||mode.IsSolid||mode.Name.Equals("Off",StringComparison.OrdinalIgnoreCase)){RgbNotice.Text="움직이는 효과를 선택한 뒤 다시 시작해 주세요.";return;}
+        if(mode.SupportsSpeed)RgbSpeedSlider.Value=50;ApplyRgb_Click(sender,e);
+    }
+    private void UpdateRgbControls()
+    {
+        if(RgbCapabilityText==null||RgbCalibrationPanel==null||SaveSettingsButton==null)return;
+        var mode=RgbEffects.SelectedItem as RgbMode;var device=RgbDevices.SelectedItem as RgbDevice;
+        bool idle=!rgbBusy&&!rgbRefreshing&&!closing,connected=idle&&rgbConnectionHealthy;
+        ApplyRgbButton.IsEnabled=connected&&device!=null&&mode!=null;ConnectRgbButton.IsEnabled=idle;
+        RgbDevices.IsEnabled=idle;RgbEffects.IsEnabled=idle;RgbZones.IsEnabled=connected&&mode?.SupportsZoneColor==true;
+        RecoverRgbButton.IsEnabled=ExportRgbButton.IsEnabled=idle;RestoreRgbButton.IsEnabled=idle&&rgbProfiles.Devices.Count>0;
+        CaseFanButton.IsEnabled=connected&&(RgbDevices.ItemsSource as List<RgbDevice>)?.Any(d=>d.HasCaseFanHeaders)==true;
+        SolidRgbButton.IsEnabled=connected&&PreferredSolid(device)!=null;
+        RestartRgbEffectButton.IsEnabled=connected&&mode!=null&&!mode.IsSolid&&!mode.Name.Equals("Off",StringComparison.OrdinalIgnoreCase);
+        RgbColorEditor.IsEnabled=RgbCalibrationPanel.IsEnabled=connected&&mode?.SupportsColor==true;
+        BrightnessSlider.IsEnabled=connected&&mode?.SupportsBrightness==true;
+        RgbSpeedPanel.Visibility=mode?.SupportsSpeed==true?Visibility.Visible:Visibility.Collapsed;RgbSpeedSlider.IsEnabled=connected;
+        SaveSettingsButton.IsEnabled=idle;
+        RgbCapabilityText.Text=mode==null?"장치와 효과를 선택하세요.":mode.IsSolid?"단색 모드는 움직임 없이 선택한 색으로 고정합니다.":!mode.SupportsColor?"이 효과는 자동 색상을 사용해 HEX 색상을 바꿀 수 없어요. 색을 지정하려면 ‘단색으로 켜기’를 선택하세요.":"이 효과는 선택한 색상을 사용할 수 있습니다.";
+        if(mode!=null&&!mode.SupportsBrightness)RgbCapabilityText.Text+=" 밝기 조절은 지원하지 않습니다.";
+        if(mode!=null&&(mode.Flags&0x40)!=0&&(mode.Field(11)==2||(mode.Flags&0x20)==0)&&Math.Max(mode.Colors,mode.Field(6))>1)
+            RgbCapabilityText.Text+=" 다중 색상 효과는 첫 번째 색만 바꾸고 나머지 팔레트를 유지합니다.";
+        if(mode!=null&&!mode.SupportsZoneColor)RgbCapabilityText.Text+=" 효과는 장치 전체에 적용됩니다.";
+        UpdatePreview();
+    }
+    internal void PreviewRgbForTest(RgbDevice fixture)
+    {
+        if(restoreFans)throw new InvalidOperationException("RGB UI fixtures are only allowed in the read-only smoke test.");
+        rgbConnectionHealthy=true;RgbDevices.ItemsSource=new List<RgbDevice>{fixture};RgbDevices.SelectedItem=fixture;UpdateRgbControls();
     }
     private void SolidRgb_Click(object sender,RoutedEventArgs e)
     {
@@ -469,45 +573,63 @@ public partial class MainWindow : Window
     private void UpdatePreview()
     {
         if (PreviewRing == null || PreviewGlow == null || BrightnessSlider == null || !TryColor(out var color)) return;
+        if((RgbEffects?.SelectedItem as RgbMode)?.SupportsColor==false)
+        {
+            PreviewRing.Stroke=PreviewGlow.Stroke=Brushes.SlateGray;PreviewRing.Opacity=.7;PreviewGlow.Opacity=.15;
+            if(RgbPreviewCaption!=null)RgbPreviewCaption.Text="자동 색상 효과 · 움직임 미리보기는 제공하지 않습니다.";return;
+        }
+        if(RgbPreviewCaption!=null)RgbPreviewCaption.Text="선택한 색 미리보기 · 실제 조명 상태와 별개";
         PreviewRing.Stroke = PreviewGlow.Stroke = new SolidColorBrush(color); PreviewRing.Opacity = BrightnessSlider.Value / 100; PreviewGlow.Opacity = BrightnessSlider.Value / 100 * 0.3;
     }
     private async void ApplyRgb_Click(object sender, RoutedEventArgs e)
     {
         if (RgbDevices.SelectedItem is not RgbDevice device || RgbEffects.SelectedItem is not RgbMode mode) return;
-        if (!TryColor(out var color)) { RgbNotice.Text = "색상은 #53D9C5처럼 #과 6자리 HEX로 입력해 주세요."; return; }
-        if (rgbBusy) return;
-        string originalHex=ColorInput.Text.Trim().ToUpperInvariant();var calibration=CurrentCalibration;
+        bool hasColor=TryColor(out var color);
+        if (!hasColor&&mode.SupportsColor) { RgbNotice.Text = "색상은 #53D9C5처럼 #과 6자리 HEX로 입력해 주세요."; return; }
+        if(!hasColor)color=Colors.White;
+        if (rgbBusy||rgbRefreshing||!rgbConnectionHealthy) return;
+        string originalHex=$"#{color.R:X2}{color.G:X2}{color.B:X2}";var calibration=CurrentCalibration;
         try{SaveCalibration(device);}catch(Exception ex){RgbNotice.Text="보정 저장 실패: "+ex.Message;return;}
         color=CurrentCalibration.Apply(color);
-        rgbBusy = true; ApplyRgbButton.IsEnabled = false; ConnectRgbButton.IsEnabled = false;
-        int brightness = (int)BrightnessSlider.Value;
+        rgbBusy = true;rgbRestore.Cancel(device.Identity); UpdateRgbControls();
+        int brightness = mode.SupportsBrightness?(int)BrightnessSlider.Value:100;
+        int? speed=CurrentRgbSpeed;
         var zoneChoice=RgbZones.SelectedItem as RgbZoneChoice;
+        bool transmitted=false;
         lastRgbWrite=DateTime.UtcNow;RgbNotice.Text="조명 설정을 보내고 실제 갱신을 기다리고 있어요…";
         try
         {
-            var result=await Task.Run(() => { using var client = new OpenRgbClient();return client.Apply(device, mode.Name, color, brightness,zoneChoice?.ZoneIds); });
+            var result=await RgbAsync(() => { using var client = new OpenRgbClient();return client.Apply(device, mode.Name, color, brightness,zoneChoice?.ZoneIds,speed); });
+            transmitted=true;
             await Task.Delay(1500);
             var actualMode=result.Modes[result.ActiveMode].Name;
-            RememberRgb(result,SavedRgbSetting.Capture(result,zoneChoice?.Key??"all",actualMode,originalHex,brightness,calibration));
+            RememberRgb(result,SavedRgbSetting.Capture(result,zoneChoice?.Key??"all",actualMode,originalHex,brightness,calibration,speed));
             AppFiles.Save(AppFiles.Load() with{Color=originalHex,Brightness=brightness,Effect=actualMode,RgbIdentity=result.Identity,RgbZone=zoneChoice?.Key??"all"});
-            RgbNotice.Text = $"{result.Name} / {zoneChoice?.Label??"장치 전체"}: {actualMode} 반영 확인 · 자동 저장됨. 실제 조명도 확인해 주세요.";
+            lastRgbError=null;RgbNotice.Text = $"{result.Name} / {zoneChoice?.Label??"장치 전체"}: {actualMode} 엔진 응답 확인 · 저장됨. 실제 조명은 직접 확인해 주세요.";
         }
-        catch (Exception ex) { RgbNotice.Text = "적용 실패: " + ex.Message; AppFiles.Log(ex.ToString()); }
-        finally { rgbBusy = false; ApplyRgbButton.IsEnabled = true; ConnectRgbButton.IsEnabled = true; }
+        catch (Exception ex)
+        {
+            lastRgbError=ex.Message;
+            if(!transmitted&&ex is IOException or TimeoutException)rgbConnectionHealthy=false;
+            RgbNotice.Text = (transmitted?"엔진에 전송됐지만 설정 저장에 실패했어요: ":"적용 실패: ")+ex.Message+" · 멈췄다면 ‘효과 다시 시작’ 또는 ‘RGB 복구’를 사용해 주세요.";AppFiles.Log(ex.ToString());
+        }
+        finally { rgbBusy = false; UpdateRgbControls(); }
     }
     private void Save_Click(object sender, RoutedEventArgs e)
     {
         if(SelectedFanMode=="수동"&&!CommitManualInput())return;
         CommitCurveEdits();var hasValidCurve=TryEditorCurve(out var savedCurve);
         if(SelectedFanMode=="사용자 곡선"&&!hasValidCurve){StatusText.Text="곡선 입력값을 먼저 확인해 주세요.";return;}
-        if (!TryColor(out _)) { StatusText.Text = "색상을 #과 6자리 HEX로 입력해 주세요."; return; }
+        bool validColor=TryColor(out var savedColor);
+        if (!validColor&&(RgbEffects.SelectedItem as RgbMode)?.SupportsColor!=false) { StatusText.Text = "색상을 #과 6자리 HEX로 입력해 주세요."; return; }
+        if(!validColor)savedColor=Colors.White;
         try
         {
             if(!TryDisplayOptions(out _)){StatusText.Text="디스플레이 색상을 #과 6자리 HEX로 입력해 주세요.";return;}
             if(RgbDevices.SelectedItem is RgbDevice currentDevice)calibrations[currentDevice.Identity]=CurrentCalibration;
             var preferences=AppFiles.Load() with
             {
-                Color=ColorInput.Text.Trim().ToUpperInvariant(),Brightness=(int)BrightnessSlider.Value,
+                Color=$"#{savedColor.R:X2}{savedColor.G:X2}{savedColor.B:X2}",Brightness=(RgbEffects.SelectedItem as RgbMode)?.SupportsBrightness==false?100:(int)BrightnessSlider.Value,
                 Effect=(RgbEffects.SelectedItem as RgbMode)?.Name??"",FanMode=SelectedFanMode,Manual=ManualSlider.Value,
                 DisplayColor=DisplayColorInput.Text.Trim().ToUpperInvariant(),DisplayBrightness=(int)DisplayBrightness.Value,
                 DisplayEffect=DisplayEffect.SelectedIndex==1?"단색":"온도에 따라",CpuTemp=ShowCpuTemp.IsChecked==true,
@@ -517,7 +639,7 @@ public partial class MainWindow : Window
             };
             AppFiles.Save(preferences);
             if(RgbDevices.SelectedItem is RgbDevice savedDevice&&RgbEffects.SelectedItem is RgbMode savedMode)
-                RememberRgb(savedDevice,SavedRgbSetting.Capture(savedDevice,preferences.RgbZone,savedMode.Name,preferences.Color,preferences.Brightness,CurrentCalibration));
+                RememberRgb(savedDevice,SavedRgbSetting.Capture(savedDevice,preferences.RgbZone,savedMode.Name,preferences.Color,preferences.Brightness,CurrentCalibration,CurrentRgbSpeed));
             StatusText.Text="화면·조명 설정을 저장했어요. 팬·장치별 조명은 다음 실행에 자동 복원됩니다.";
         }
         catch (Exception ex) { StatusText.Text = "저장 실패: " + ex.Message; }

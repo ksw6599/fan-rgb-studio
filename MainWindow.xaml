@@ -33,7 +33,7 @@
      <TextBlock Text="저장한 설정 자동 복원" Foreground="#CAD2DE" FontWeight="Bold" Margin="0,0,0,10"/>
      <TextBlock Text="적용한 팬·조명 설정은 다음 실행에 장치를 확인한 뒤 복원해요." Style="{StaticResource Label}" LineHeight="21"/>
      <TextBlock Text="X 닫기 → 트레이에서 계속 실행" Foreground="#A9B9CC" FontSize="10" Margin="0,18,0,0"/>
-     <TextBlock Text="v1.6.0 · LOCAL ONLY" Foreground="#6C788D" FontSize="10" Margin="0,10,0,0"/>
+     <TextBlock x:Name="VersionText" Text="Fan Studio · LOCAL ONLY" Foreground="#6C788D" FontSize="10" Margin="0,10,0,0"/>
     </StackPanel>
    </DockPanel>
   </Border>
@@ -93,7 +93,7 @@
       </StackPanel>
      </Border>
      <Border Grid.Column="1" Style="{StaticResource Card}">
-      <StackPanel>
+      <StackPanel x:Name="RgbPanel">
        <DockPanel><Button x:Name="ConnectRgbButton" DockPanel.Dock="Right" Content="RGB 연결" Click="ConnectRgb_Click" Padding="10,6" FontSize="11"/><TextBlock Text="02   RGB 조명" Foreground="#BFA8FF" FontSize="12" FontWeight="Bold"/></DockPanel>
        <TextBlock Text="내 취향의 빛" FontSize="21" FontWeight="Bold" Margin="0,9,0,5"/>
        <TextBlock Text="OpenRGB에서 감지된 장치를 제어합니다." Style="{StaticResource Label}"/>
@@ -103,7 +103,7 @@
         <Path Data="M 0,-28 C 31,-29 35,-1 9,1 C 29,27 -2,36 -6,10 C -32,24 -37,-5 -10,-6 C -27,-31 -1,-40 0,-12 Z" Fill="#718897" Stretch="Uniform" Width="56" Height="56" HorizontalAlignment="Center" VerticalAlignment="Center"/>
         <Ellipse Width="18" Height="18" Fill="#222C38" Stroke="#697A91" StrokeThickness="2"/>
        </Grid>
-       <TextBlock Text="미리보기 · 실제 조명 상태와 별개" HorizontalAlignment="Center" Foreground="#79869B" FontSize="10" Margin="0,0,0,13"/>
+       <TextBlock x:Name="RgbPreviewCaption" Text="미리보기 · 실제 조명 상태와 별개" HorizontalAlignment="Center" Foreground="#79869B" FontSize="10" Margin="0,0,0,13"/>
        <Button x:Name="CaseFanButton" Content="시스템 팬 조명 선택" Click="CaseFan_Click" Padding="12,7" HorizontalAlignment="Left" Margin="0,0,0,7" IsEnabled="False"/>
        <ComboBox x:Name="RgbDevices" DisplayMemberPath="Label" SelectionChanged="RgbDevice_Changed" AutomationProperties.Name="RGB 장치"/>
        <TextBlock Text="조명 구역" Style="{StaticResource Label}"/>
@@ -111,11 +111,19 @@
        <TextBlock Text="구역별 색상은 단색 모드를 사용하세요. 효과 변경은 장치 전체에 적용되며, LED 수는 실제 팬 개수가 아닙니다." Style="{StaticResource Label}" FontSize="10" Margin="0,0,0,10"/>
        <TextBlock Text="장치 효과" Style="{StaticResource Label}"/>
        <ComboBox x:Name="RgbEffects" DisplayMemberPath="Name" SelectionChanged="RgbEffect_Changed" AutomationProperties.Name="RGB 효과"/>
+       <TextBlock x:Name="RgbCapabilityText" Text="효과를 선택하면 지원하는 색상·밝기·속도를 표시합니다." Style="{StaticResource Label}" FontSize="10" Margin="0,0,0,9"/>
+       <StackPanel x:Name="RgbSpeedPanel" Visibility="Collapsed">
+        <TextBlock x:Name="RgbSpeedLabel" Text="효과 속도 50%" Foreground="#BFA8FF"/>
+        <Slider x:Name="RgbSpeedSlider" Minimum="0" Maximum="100" Value="50" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="RgbSpeed_Changed" AutomationProperties.Name="RGB 효과 속도"/>
+        <TextBlock Text="장치가 제공하는 범위 기준입니다. 일부 장치는 속도 0에서 효과가 멈춥니다." Style="{StaticResource Label}" FontSize="10" Margin="0,0,0,8"/>
+       </StackPanel>
+       <StackPanel x:Name="RgbColorEditor">
        <DockPanel><TextBlock DockPanel.Dock="Right" Text="HEX 색상" Foreground="#939CAD" FontSize="11" VerticalAlignment="Center"/><TextBox x:Name="ColorInput" Text="#53D9C5" Width="130" HorizontalAlignment="Left" TextChanged="Color_Changed" AutomationProperties.Name="RGB HEX 색상"/></DockPanel>
        <WrapPanel x:Name="Swatches" Margin="0,12,0,12"/>
+       </StackPanel>
        <DockPanel><TextBlock x:Name="BrightnessLabel" DockPanel.Dock="Right" Text="밝기 70%" Foreground="#BFA8FF"/><TextBlock Text="밝기" Style="{StaticResource Label}"/></DockPanel>
        <Slider x:Name="BrightnessSlider" Minimum="0" Maximum="100" Value="70" ValueChanged="Brightness_Changed" AutomationProperties.Name="RGB 밝기"/>
-       <Expander Header="실제 LED 색상 보정 · 장치별 저장" Foreground="#BFA8FF" Margin="0,8,0,12">
+       <Expander x:Name="RgbCalibrationPanel" Header="실제 LED 색상 보정 · 장치별 저장" Foreground="#BFA8FF" Margin="0,8,0,12">
         <StackPanel Margin="0,10,0,0">
          <TextBlock Text="강하게 보이는 색을 낮춘 뒤 조명 설정 적용을 누르세요. 화면과 LED의 완전한 색 일치를 보장하지 않습니다." Style="{StaticResource Label}" FontSize="10"/>
          <TextBlock Text="{Binding ElementName=RedGain,Path=Value,StringFormat=빨강 {0:F0}%}"/><Slider x:Name="RedGain" Minimum="0" Maximum="200" Value="100" TickFrequency="1" IsSnapToTickEnabled="True" AutomationProperties.Name="빨강 색상 보정"/>
@@ -125,6 +133,8 @@
         </StackPanel>
        </Expander>
        <WrapPanel Margin="0,4,0,0"><Button x:Name="ApplyRgbButton" Content="조명 설정 적용" Background="#BFA8FF" Foreground="#251D3B" Click="ApplyRgb_Click" IsEnabled="False"/><Button x:Name="SolidRgbButton" Content="단색으로 켜기" Click="SolidRgb_Click" IsEnabled="False"/></WrapPanel>
+       <WrapPanel Margin="0,9,0,0"><Button x:Name="RestartRgbEffectButton" Content="효과 다시 시작" Click="RestartRgbEffect_Click" Padding="10,7" IsEnabled="False"/><Button x:Name="RecoverRgbButton" Content="RGB 복구" Click="RecoverRgb_Click" Padding="10,7"/><Button x:Name="ExportRgbButton" Content="RGB 진단 저장" Click="ExportRgb_Click" Padding="10,7"/></WrapPanel>
+       <Button x:Name="RestoreRgbButton" Content="저장된 조명 다시 적용" Click="RestoreRgb_Click" Padding="10,7" HorizontalAlignment="Left" Margin="0,9,0,0" IsEnabled="False"/>
        <TextBlock x:Name="RgbNotice" Text="RGB 연결을 누르면 조명 엔진을 시작합니다." Foreground="#A9B9CC" FontSize="11" Margin="0,14,0,0" LineHeight="19"/>
        <TextBlock x:Name="RgbRestoreNotice" Text="적용한 장치별 조명 설정을 자동 저장하고 로그인 후 다시 적용합니다." Foreground="#939CAD" FontSize="10" Margin="0,8,0,0"/>
       </StackPanel>
@@ -140,7 +150,7 @@
       <TextBlock Text="연결 중에는 선택한 항목·색상·밝기가 다음 갱신에 반영됩니다. CPU 온도를 못 읽으면 숫자 대신 —로 표시합니다." Style="{StaticResource Label}" Margin="0,7,0,0"/>
      </StackPanel>
     </Border>
-    <DockPanel Margin="0,18,0,0"><Button DockPanel.Dock="Right" Content="내 설정 저장" Click="Save_Click" Padding="13,7" FontSize="11"/><TextBlock x:Name="StatusText" Text="적용한 팬 설정은 다음 실행에 자동 복원됩니다." Foreground="#8290A5" FontSize="11" VerticalAlignment="Center"/></DockPanel>
+    <DockPanel Margin="0,18,0,0"><Button x:Name="SaveSettingsButton" DockPanel.Dock="Right" Content="내 설정 저장" Click="Save_Click" Padding="13,7" FontSize="11"/><TextBlock x:Name="StatusText" Text="적용한 팬 설정은 다음 실행에 자동 복원됩니다." Foreground="#8290A5" FontSize="11" VerticalAlignment="Center"/></DockPanel>
    </StackPanel>
   </ScrollViewer>
  </Grid>

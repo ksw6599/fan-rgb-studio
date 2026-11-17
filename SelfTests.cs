@@ -187,8 +187,95 @@ public static class SelfTests
         Check("native effect without per-LED colors cannot target one header",()=>
         {
             using var fake=new FakeServer(splitZones:true,flagsOverride:0);using var client=new OpenRgbClient(fake.Port);var device=client.Devices()[0];bool rejected=false;
-            try{client.Apply(device,"Static",Colors.Red,70,[0]);}catch(IOException){rejected=true;}
+            try{client.Apply(device,"Static",Colors.Red,70,[0]);}catch(InvalidDataException){rejected=true;}
             Assert(rejected&&fake.ModePacket==null,"unsupported zone mode");
+        });
+        Check("whole-device RGB mode rejects partial headers before any write",()=>
+        {
+            using var fake=new FakeServer(perLed:true,splitZones:true,flagsOverride:0x420);using var client=new OpenRgbClient(fake.Port);var device=client.Devices()[0];bool rejected=false;
+            try{client.Apply(device,"Static",Colors.Red,70,[1]);}catch(InvalidDataException){rejected=true;}
+            Assert(rejected&&fake.ModePacket==null&&fake.LedPacket==null&&fake.ZonePacket==null,"entire-device flag must be respected");
+        });
+        Check("native random effects retain automatic color mode and do not get LED writes",()=>
+        {
+            var native=ModeFixture("Random wave",0x881,(2,1),(3,10),(8,4),(10,0),(11,3));
+            using var fake=new FakeServer(initialModeRaw:native.Raw);using var client=new OpenRgbClient(fake.Port);var result=client.Apply(client.Devices()[0],native.Name,Colors.Red,70);
+            Assert(result.Modes[0].Field(11)==3&&result.Modes[0].Field(10)==6&&fake.LedPacket==null,"native random and diagonal direction");
+            Assert(result.CurrentColors!.SequenceEqual(new uint[]{0x332211,0x665544}),"automatic colors are not replaced by static LED vectors");
+        });
+        Check("RGB dual-color capability preserves per-LED mode instead of forcing mode-specific",()=>
+        {
+            var dual=ModeFixture("Dual",0x60,(6,1),(7,3),(11,1));using var fake=new FakeServer(initialModeRaw:dual.Raw);using var client=new OpenRgbClient(fake.Port);
+            var result=client.Apply(client.Devices()[0],dual.Name,Colors.Red,100);
+            Assert(result.Modes[0].Field(11)==1&&fake.LedPacket!=null&&result.CurrentColors!.All(c=>c==255),"per-LED selection retained");
+        });
+        Check("mode-specific effect colors do not also send unrelated per-LED vectors",()=>
+        {
+            var specific=ModeFixture("Specific",0x60,(6,1),(7,3),(11,2));using var fake=new FakeServer(initialModeRaw:specific.Raw);using var client=new OpenRgbClient(fake.Port);
+            var result=client.Apply(client.Devices()[0],specific.Name,Colors.Blue,100);
+            Assert(result.Modes[0].Colors==1&&result.Modes[0].Field(11)==2&&fake.LedPacket==null&&result.CurrentColors![0]==0x332211,"mode colors only");
+        });
+        Check("native multicolor palettes are not flattened into a frozen-looking solid color",()=>
+        {
+            var mode=ModeFixture("Palette wave",0x40,(6,3),(7,3),(11,2));var raw=mode.Raw.Concat(new byte[12]).ToArray();
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(raw.AsSpan(mode.FieldsOffset+48),3);
+            for(int i=0;i<3;i++)System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(raw.AsSpan(mode.FieldsOffset+50+i*4),new uint[]{0x0000ff,0xff0000,0x00ff00}[i]);
+            mode=mode with{Raw=raw,Colors=3};using var fake=new FakeServer(initialModeRaw:raw);using var client=new OpenRgbClient(fake.Port);
+            var result=client.Apply(client.Devices()[0],mode.Name,Colors.White,100);var applied=result.Modes[0];
+            Assert(BitConverter.ToUInt32(applied.Raw,applied.FieldsOffset+50)==0xffffff&&BitConverter.ToUInt32(applied.Raw,applied.FieldsOffset+54)==0xff0000&&BitConverter.ToUInt32(applied.Raw,applied.FieldsOffset+58)==0x00ff00,"only requested first palette entry changes");
+        });
+        Check("RGB speed stays in native bounds, preserves valid zero and fixes invalid defaults",()=>
+        {
+            var speed=ModeFixture("Wave",1,(2,10),(3,90),(8,0));
+            Assert(RgbWritePlan.Build(speed,Colors.White,100,false).Speed==50,"invalid inactive speed becomes a valid midpoint");
+            Assert(RgbWritePlan.Build(speed,Colors.White,100,false,75).Speed==70,"explicit percentage uses native bounds");
+            var zero=ModeFixture("Wave",1,(2,0),(3,3),(8,0));Assert(RgbWritePlan.Build(zero,Colors.White,100,false).Speed==0,"zero may be a valid device-specific speed");
+            var binary=ModeFixture("Binary speed",0x11,(2,0),(3,1),(4,0),(5,1));var binaryPlan=RgbWritePlan.Build(binary,Colors.White,50,false,50);
+            Assert(binaryPlan.Speed==1&&binaryPlan.Brightness==1,"midpoint must not accidentally round a binary speed or brightness down to off");
+            foreach(var pair in new[]{(Flags:4u,Direction:2u),(Flags:8u,Direction:4u),(Flags:0x800u,Direction:6u)})
+            {
+                var mode=ModeFixture("Directional",pair.Flags,(10,99));var plan=RgbWritePlan.Build(mode,Colors.White,100,false);
+                Assert(BitConverter.ToUInt32(plan.Raw,mode.FieldsOffset+40)==pair.Direction,"supported direction enum");
+            }
+        });
+        Check("malformed RGB speed and brightness are rejected without changing the mode",()=>
+        {
+            foreach(var mode in new[]{ModeFixture("Invalid speed",1,(2,10),(3,1)),ModeFixture("Invalid brightness",0x10,(4,100),(5,0)),ModeFixture("Invalid palette",0x40,(6,1),(7,1025),(11,2))})
+            {
+                using var fake=new FakeServer(initialModeRaw:mode.Raw);using var client=new OpenRgbClient(fake.Port);var device=client.Devices()[0];bool rejected=false;
+                try{client.Apply(device,mode.Name,Colors.Red,70);}catch(InvalidDataException){rejected=true;}
+                Assert(rejected&&fake.ModePacket==null,"preflight before mode mutation");
+            }
+        });
+        Check("RGB saved effect speed survives restart and reaches the SDK packet",()=>
+        {
+            var mode=ModeFixture("Wave",0x21,(2,10),(3,90),(8,50));using var fake=new FakeServer(initialModeRaw:mode.Raw);using var client=new OpenRgbClient(fake.Port);var device=client.Devices()[0];
+            var setting=SavedRgbSetting.Capture(device,"all",mode.Name,"#112233",70,new(),75);
+            var stored=JsonSerializer.Deserialize<SavedRgbDevice>(JsonSerializer.Serialize(new SavedRgbDevice(device.Identity,device.Name,[setting])))!;
+            stored.Apply(client);Assert(stored.Settings[0].SpeedPercent==75&&BitConverter.ToUInt32(fake.ModePacket!,8+mode.FieldsOffset+32)==70,"persisted speed");
+        });
+        Check("RGB engine ignoring an effect request is not reported as accepted",()=>
+        {
+            var mode=ModeFixture("Wave",1,(2,10),(3,90),(8,50));using var fake=new FakeServer(initialModeRaw:mode.Raw,ignoreModeWrites:true);using var client=new OpenRgbClient(fake.Port);bool rejected=false;
+            try{client.Apply(client.Devices()[0],mode.Name,Colors.Red,70,speedPercent:75);}catch(IOException){rejected=true;}
+            Assert(rejected,"speed readback mismatch");
+        });
+        Check("stalled RGB replies have a bounded deadline and never write a mode",()=>
+        {
+            using var fake=new FakeServer(stallDeviceResponse:true);var watch=System.Diagnostics.Stopwatch.StartNew();bool failed=false;
+            try{using var client=new OpenRgbClient(fake.Port,TimeSpan.FromMilliseconds(600));client.Devices();}catch(Exception ex)when(ex is IOException or TimeoutException){failed=true;}
+            Assert(failed&&watch.Elapsed<TimeSpan.FromSeconds(3)&&fake.ModePacket==null,"bounded no-response recovery");
+        });
+        Check("RGB diagnostics omit private device identifiers and machine paths",()=>
+        {
+            var device=OpenRgbClient.Parse(0,DeviceBytes()) with{Serial="SERIAL_SECRET",Location="USB_PATH_SECRET"};var json=RgbDiagnostics.Serialize([device],"app-owned",null);
+            Assert(json.Contains("Fixture RGB")&&json.Contains("SupportsColor")&&!json.Contains("SERIAL_SECRET")&&!json.Contains("USB_PATH_SECRET")&&!json.Contains(Environment.MachineName),"shareable RGB-only report");
+        });
+        Check("permanent RGB profile errors stop startup retries until an explicit retry",()=>
+        {
+            var now=DateTime.UtcNow;var queue=new RgbRestoreQueue(new(1,Environment.MachineName,[new("device","Device",[])]),now);
+            queue.Failed("device",now,"unsupported effect",retry:false);
+            Assert(queue.PendingCount==0&&queue.CompletedCount==0&&queue.Due(now.AddSeconds(10))==null,"no repeated bad-mode writes");
         });
         Check("explicit upgrade session restores only verified channels and duty",()=>
         {
@@ -310,13 +397,26 @@ public static class SelfTests
         return failed == 0 ? 0 : 1;
     }
     private static void String(BinaryWriter w, string s) { var bytes = Encoding.UTF8.GetBytes(s + "\0"); w.Write((ushort)bytes.Length); w.Write(bytes); }
-    private static byte[] DeviceBytes(string serial = "fixture-1",bool perLed=false,bool splitZones=false,uint[]? colors=null,uint? flagsOverride=null,bool asrock=false)
+    internal static RgbMode ModeFixture(string name,uint flags,params (int Field,uint Value)[] values)
+    {
+        var mode=OpenRgbClient.Parse(0,DeviceBytes(perLed:true,flagsOverride:flags)).Modes[0];
+        foreach(var value in values)System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(mode.Raw.AsSpan(mode.FieldsOffset+value.Field*4),value.Value);
+        using var buffer=new MemoryStream();using var writer=new BinaryWriter(buffer);String(writer,name);int offset=(int)buffer.Position;writer.Write(mode.Raw[mode.FieldsOffset..]);
+        return mode with{Name=name,Raw=buffer.ToArray(),FieldsOffset=offset};
+    }
+    private static byte[] DeviceBytes(string serial = "fixture-1",bool perLed=false,bool splitZones=false,uint[]? colors=null,uint? flagsOverride=null,bool asrock=false,byte[]? modeRaw=null)
     {
         using var buffer = new MemoryStream(); using var w = new BinaryWriter(buffer);
         w.Write(0u); w.Write(0); String(w, asrock?"ASRock Test Board":"Fixture RGB"); String(w, "Test vendor"); String(w, "Test device"); String(w, "1.0"); String(w, serial); String(w, asrock?"HID:test":"USB:test");
-        w.Write((ushort)1); w.Write(0); String(w, "Static");
-        foreach (uint field in new uint[] { 0, flagsOverride??(perLed?0x20u:0x40u), 0, 0, 0, 100, perLed?0u:1u, perLed?0u:1u, 0, 100, 0, perLed?1u:2u }) w.Write(field);
-        w.Write((ushort)(perLed?0:1));if(!perLed)w.Write(0u);w.Write((ushort)(splitZones?2:1));
+        w.Write((ushort)1); w.Write(0);
+        if(modeRaw!=null)w.Write(modeRaw);
+        else
+        {
+            String(w, "Static");
+            foreach (uint field in new uint[] { 0, flagsOverride??(perLed?0x20u:0x40u), 0, 0, 0, 100, perLed?0u:1u, perLed?0u:1u, 0, 100, 0, perLed?1u:2u }) w.Write(field);
+            w.Write((ushort)(perLed?0:1));if(!perLed)w.Write(0u);
+        }
+        w.Write((ushort)(splitZones?2:1));
         String(w,"Addressable Header 1");w.Write(1);w.Write(splitZones?1u:2u);w.Write(splitZones?1u:2u);w.Write(splitZones?1u:2u);w.Write((ushort)0);
         if(splitZones){String(w,"Addressable Header 2");w.Write(1);w.Write(1u);w.Write(1u);w.Write(1u);w.Write((ushort)0);}
         w.Write((ushort)2); String(w, "LED1"); w.Write(0u); String(w, "LED2"); w.Write(1u);
@@ -331,7 +431,8 @@ public static class SelfTests
         public int Port { get; }
         public byte[]? ModePacket { get; private set; }
         public byte[]? ZonePacket{get;private set;}
-        public FakeServer(bool changeIdentity = false,bool perLed=false,bool splitZones=false,uint? flagsOverride=null,bool asrock=false)
+        public byte[]? LedPacket{get;private set;}
+        public FakeServer(bool changeIdentity = false,bool perLed=false,bool splitZones=false,uint? flagsOverride=null,bool asrock=false,byte[]? initialModeRaw=null,bool stallDeviceResponse=false,bool ignoreModeWrites=false)
         {
             listener.Start(); Port = ((IPEndPoint)listener.LocalEndpoint).Port;
             task = Task.Run(() =>
@@ -339,15 +440,15 @@ public static class SelfTests
                 try
                 {
                     connection = listener.AcceptTcpClient(); using var stream = connection.GetStream(); stream.ReadTimeout = 6000;
-                    int reads = 0;uint[] colors=[0x332211,0x665544];
+                    int reads = 0;uint[] colors=[0x332211,0x665544];byte[]? modeRaw=initialModeRaw;
                     while (true)
                     {
                         byte[] header = new byte[16]; stream.ReadExactly(header); uint id = BitConverter.ToUInt32(header, 8), device = BitConverter.ToUInt32(header, 4);
                         byte[] body = new byte[BitConverter.ToUInt32(header, 12)]; stream.ReadExactly(body);
-                        byte[]? answer = id switch { 40 => BitConverter.GetBytes(6u), 0 => BitConverter.GetBytes(1u), 1 => DeviceBytes(changeIdentity && ++reads > 1 ? "changed" : "fixture-1",perLed,splitZones,colors,flagsOverride,asrock), _ => null };
-                        if (id == 1101) ModePacket = body;
+                        byte[]? answer = id switch { 40 => BitConverter.GetBytes(6u), 0 => BitConverter.GetBytes(1u), 1 when !stallDeviceResponse => DeviceBytes(changeIdentity && ++reads > 1 ? "changed" : "fixture-1",perLed,splitZones,colors,flagsOverride,asrock,modeRaw), _ => null };
+                        if (id == 1101){ModePacket = body;if(!ignoreModeWrites)modeRaw=body[8..];}
                         if(id==1051){ZonePacket=body;int zone=(int)BitConverter.ToUInt32(body,4);int count=BitConverter.ToUInt16(body,8);int start=splitZones?zone:0;for(int n=0;n<count;n++)colors[start+n]=BitConverter.ToUInt32(body,10+n*4);}
-                        if(id==1050){int count=BitConverter.ToUInt16(body,4);for(int n=0;n<count;n++)colors[n]=BitConverter.ToUInt32(body,6+n*4);}
+                        if(id==1050){LedPacket=body;int count=BitConverter.ToUInt16(body,4);for(int n=0;n<count;n++)colors[n]=BitConverter.ToUInt32(body,6+n*4);}
                         if (answer == null) continue;
                         using var output = new MemoryStream(); using var w = new BinaryWriter(output); w.Write(Encoding.ASCII.GetBytes("ORGB")); w.Write(device); w.Write(id); w.Write((uint)answer.Length); w.Write(answer);
                         var bytes = output.ToArray(); stream.Write(bytes.AsSpan(0, 7)); stream.Write(bytes.AsSpan(7));

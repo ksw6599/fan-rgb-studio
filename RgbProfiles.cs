@@ -6,13 +6,13 @@ using System.Windows.Media;
 namespace FanRgbStudio;
 
 public record SavedRgbZone(uint Index, string Name, uint Leds, int Start);
-public record SavedRgbSetting(string Zone, string Mode, string Color, int Brightness, RgbCalibration Calibration, List<SavedRgbZone> Zones)
+public record SavedRgbSetting(string Zone, string Mode, string Color, int Brightness, RgbCalibration Calibration, List<SavedRgbZone> Zones,int? SpeedPercent=null)
 {
-    public static SavedRgbSetting Capture(RgbDevice device, string zone, string mode, string hex, int brightness, RgbCalibration calibration)
+    public static SavedRgbSetting Capture(RgbDevice device, string zone, string mode, string hex, int brightness, RgbCalibration calibration,int? speedPercent=null)
     {
         var choice=RgbZoneChoice.For(device).SingleOrDefault(z=>z.Key==zone)??throw new InvalidDataException("저장할 RGB 구역이 없습니다.");
         var setting=new SavedRgbSetting(zone,OpenRgbClient.ZoneCompatibleMode(device,mode,choice.ZoneIds!=null),hex.ToUpperInvariant(),brightness,calibration,
-            device.Zones?.Where(z=>choice.ZoneIds?.Contains(z.Index)==true).Select(z=>new SavedRgbZone(z.Index,z.Name,z.Leds,z.Start)).ToList()??[]);
+            device.Zones?.Where(z=>choice.ZoneIds?.Contains(z.Index)==true).Select(z=>new SavedRgbZone(z.Index,z.Name,z.Leds,z.Start)).ToList()??[],speedPercent);
         setting.Validate(device);return setting;
     }
     public RgbZoneChoice Validate(RgbDevice device)
@@ -22,12 +22,14 @@ public record SavedRgbSetting(string Zone, string Mode, string Color, int Bright
             throw new InvalidDataException("저장된 RGB 색상 또는 밝기가 올바르지 않습니다.");
         var choice=RgbZoneChoice.For(device).SingleOrDefault(z=>z.Key==Zone)??throw new InvalidDataException("저장된 RGB 구역이 변경되었습니다.");
         var mode=device.Modes.SingleOrDefault(m=>m.Name==Mode)??throw new InvalidDataException("저장된 RGB 효과를 사용할 수 없습니다.");
+        if(SpeedPercent is <0 or >100||SpeedPercent!=null&&(mode.Flags&1)==0)throw new InvalidDataException("저장된 효과 속도를 사용할 수 없습니다.");
         if(choice.ZoneIds!=null)
         {
-            if((mode.Flags&0x20)==0||Zones.Count!=choice.ZoneIds.Length||Zones.Any(z=>z==null)||Zones.Select(z=>z.Index).Distinct().Count()!=Zones.Count||
+            if(!mode.SupportsZoneColor||Zones.Count!=choice.ZoneIds.Length||Zones.Any(z=>z==null)||Zones.Select(z=>z.Index).Distinct().Count()!=Zones.Count||
                 choice.ZoneIds.Any(id=>!Zones.Any(z=>z.Index==id&&device.Zones!.Any(current=>current.Index==id&&current.Name==z.Name&&current.Leds==z.Leds&&current.Start==z.Start))))
                 throw new InvalidDataException("저장된 RGB 헤더 구성이 변경되었습니다.");
         }
+        RgbWritePlan.Build(mode,OutputColor,Brightness,choice.ZoneIds!=null,SpeedPercent);
         return choice;
     }
     [System.Text.Json.Serialization.JsonIgnore]
@@ -48,7 +50,7 @@ public record SavedRgbDevice(string Identity, string Name, List<SavedRgbSetting>
     {
         var device=Resolve(client.Devices());
         foreach(var setting in Settings)
-            device=client.Apply(device,setting.Mode,setting.OutputColor,setting.Brightness,setting.Validate(device).ZoneIds);
+            device=client.Apply(device,setting.Mode,setting.OutputColor,setting.Brightness,setting.Validate(device).ZoneIds,setting.SpeedPercent);
     }
 }
 
@@ -112,8 +114,9 @@ public sealed class RgbRestoreQueue
         if(entry.Passes==0){pending[identity]=entry with{Passes=1,Due=now.AddSeconds(10)};Status=entry.Device.Name+": 적용 완료 · 시작 안정화 후 재확인 대기";}
         else{pending.Remove(identity);CompletedCount++;Status=entry.Device.Name+": 저장한 조명 자동 복원 완료";}
     }
-    public void Failed(string identity,DateTime now,string message)
+    public void Failed(string identity,DateTime now,string message,bool retry=true)
     {
+        if(!retry){pending.Remove(identity);Status="RGB 자동 복원 중지: "+message;return;}
         if(pending.TryGetValue(identity,out var entry))pending[identity]=entry with{Due=now.AddSeconds(5)};
         Status="RGB 자동 복원 대기: "+message;
     }

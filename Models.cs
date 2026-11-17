@@ -15,6 +15,7 @@ public record Preferences(string Color = "#53D9C5", int Brightness = 70, string 
 
 public static class AppFiles
 {
+    public static string Version=>typeof(AppFiles).Assembly.GetName().Version?.ToString(3)??"0.0.0";
     public static readonly string Data = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SunuongFanStudio");
     public static bool IsAdmin => new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
     public static void Log(string message)
