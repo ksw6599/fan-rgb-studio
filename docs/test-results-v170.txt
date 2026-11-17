@@ -29,6 +29,7 @@ PASS mode-specific effect colors do not also send unrelated per-LED vectors
 PASS native multicolor palettes are not flattened into a frozen-looking solid color
 PASS RGB speed stays in native bounds, preserves valid zero and fixes invalid defaults
 PASS malformed RGB speed and brightness are rejected without changing the mode
+PASS zero brightness selects Off without carrying an animated effect speed
 PASS RGB saved effect speed survives restart and reaches the SDK packet
 PASS RGB engine ignoring an effect request is not reported as accepted
 PASS stalled RGB replies have a bounded deadline and never write a mode
@@ -48,4 +49,4 @@ PASS PA120 disabled metrics and zero brightness send no LEDs
 PASS display telemetry selects CPU package and discrete GPU core, not hotspot
 PASS v1.0 preferences remain readable with v1.1 display defaults
 PASS bundled OpenRGB 1.1 SDK negotiation and zero-device response (--nodetect)
-50 passed; 0 failed. Hardware writes were not performed by these tests.
+51 passed; 0 failed. Hardware writes were not performed by these tests.

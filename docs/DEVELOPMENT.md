@@ -19,7 +19,7 @@ pwsh -File .\scripts\Build-Release.ps1
 - `--self-test --with-engine`: 보간·고온 보호·설정 저장·RGB TCP/복원 큐·PA120 인코딩. OpenRGB는 `--nodetect`와 별도 포트로 실행하며 실제 장치에 쓰지 않습니다.
 - `--tray-smoke-test`: 대화형 Windows에서 WPF 편집창, 트레이와 읽기 전용 센서 worker를 검사합니다. 저장 팬/RGB 정책 자동 적용은 끕니다.
 - v1.6.0의 [기능 검사](test-results-v160.txt) 38개와 [WPF·트레이 검사](tray-test-v160.json) 22개가 통과했습니다.
-- v1.7.0의 [기능 검사](test-results-v170.txt) 50개와 [WPF·트레이 검사](tray-test-v170.json) 30개가 통과했습니다. RGB 효과 플래그, 방향·속도·팔레트, 응답 제한과 진단의 식별 정보 제외를 검사합니다.
+- v1.7.0의 [기능 검사](test-results-v170.txt) 51개와 [WPF·트레이 검사](tray-test-v170.json) 30개가 통과했습니다. RGB 효과 플래그, 방향·속도·팔레트, 응답 제한과 진단의 식별 정보 제외를 검사합니다.
 - UI 검사는 별도의 인스턴스·복원 이벤트를 사용하고 운영 앱의 상태 JSON을 덮어쓰지 않습니다.
 - GPU Off 후 로그인 시작 작업으로 새 앱·엔진을 실행했고 사용자가 주황색 자동 복원을 확인했습니다. 실제 PC 전원 재부팅 검사는 수행하지 않았습니다.
 - CI 성공이 해당 메인보드의 실물 팬 제어 지원을 뜻하지는 않습니다.

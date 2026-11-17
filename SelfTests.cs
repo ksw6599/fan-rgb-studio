@@ -247,6 +247,13 @@ public static class SelfTests
                 Assert(rejected&&fake.ModePacket==null,"preflight before mode mutation");
             }
         });
+        Check("zero brightness selects Off without carrying an animated effect speed",()=>
+        {
+            var off=ModeFixture("Off",0);
+            using var fake=new FakeServer(initialModeRaw:off.Raw);using var client=new OpenRgbClient(fake.Port);
+            var applied=client.Apply(client.Devices()[0],"Wave",Colors.Red,0,speedPercent:75);
+            Assert(applied.Modes[applied.ActiveMode].Name=="Off"&&fake.LedPacket==null,"Off ignores animation speed and does not send LED colors");
+        });
         Check("RGB saved effect speed survives restart and reaches the SDK packet",()=>
         {
             var mode=ModeFixture("Wave",0x21,(2,10),(3,90),(8,50));using var fake=new FakeServer(initialModeRaw:mode.Raw);using var client=new OpenRgbClient(fake.Port);var device=client.Devices()[0];

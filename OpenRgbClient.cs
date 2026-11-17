@@ -175,7 +175,8 @@ public sealed class OpenRgbClient : IDisposable
         // Polychrome USB Direct needs WriteAllZones; UpdateZoneLEDs only calls WriteZone.
         // Use its native Static mode for uniform header colors rather than acknowledging an ineffective Direct write.
         modeName=ZoneCompatibleMode(current,modeName,selected!=null);
-        if(brightness<=0&&selected==null&&current.Modes.Any(m=>m.Name.Equals("Off",StringComparison.OrdinalIgnoreCase)))modeName=current.Modes.First(m=>m.Name.Equals("Off",StringComparison.OrdinalIgnoreCase)).Name;
+        if(brightness==0&&selected==null&&current.Modes.FirstOrDefault(m=>m.Name.Equals("Off",StringComparison.OrdinalIgnoreCase)) is {} off)
+        {modeName=off.Name;speedPercent=null;}
         var mode = current.Modes.SingleOrDefault(m => m.Name == modeName) ?? throw new IOException("이 장치에서 제공하지 않는 효과입니다.");
         var plan=RgbWritePlan.Build(mode,color,brightness,selected!=null,speedPercent);
         var raw=plan.Raw;uint rgb=plan.PackedColor;
