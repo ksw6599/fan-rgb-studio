@@ -32,6 +32,6 @@
     "PASS explicit exit closes window and disposes tray icon",
     "PASS explicit exit ends the worker"
   ],
-  "WorkerPid": 25764,
+  "WorkerPid": 10316,
   "HardwareWrites": false
 }

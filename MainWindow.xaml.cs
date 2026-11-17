@@ -602,8 +602,8 @@ public partial class MainWindow : Window
             var result=await RgbAsync(() => { using var client = new OpenRgbClient();return client.Apply(device, mode.Name, color, brightness,zoneChoice?.ZoneIds,speed); });
             transmitted=true;
             await Task.Delay(1500);
-            var actualMode=result.Modes[result.ActiveMode].Name;
-            RememberRgb(result,SavedRgbSetting.Capture(result,zoneChoice?.Key??"all",actualMode,originalHex,brightness,calibration,speed));
+            var acceptedMode=result.Modes[result.ActiveMode];var actualMode=acceptedMode.Name;
+            RememberRgb(result,SavedRgbSetting.Capture(result,zoneChoice?.Key??"all",actualMode,originalHex,brightness,calibration,acceptedMode.SupportsSpeed?speed:null));
             AppFiles.Save(AppFiles.Load() with{Color=originalHex,Brightness=brightness,Effect=actualMode,RgbIdentity=result.Identity,RgbZone=zoneChoice?.Key??"all"});
             lastRgbError=null;RgbNotice.Text = $"{result.Name} / {zoneChoice?.Label??"장치 전체"}: {actualMode} 엔진 응답 확인 · 저장됨. 실제 조명은 직접 확인해 주세요.";
         }

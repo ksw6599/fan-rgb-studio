@@ -253,6 +253,8 @@ public static class SelfTests
             using var fake=new FakeServer(initialModeRaw:off.Raw);using var client=new OpenRgbClient(fake.Port);
             var applied=client.Apply(client.Devices()[0],"Wave",Colors.Red,0,speedPercent:75);
             Assert(applied.Modes[applied.ActiveMode].Name=="Off"&&fake.LedPacket==null,"Off ignores animation speed and does not send LED colors");
+            var saved=SavedRgbSetting.Capture(applied,"all","Off","#FF0000",0,new());
+            Assert(saved.SpeedPercent==null,"saved Off effect has no animation speed");
         });
         Check("RGB saved effect speed survives restart and reaches the SDK packet",()=>
         {
