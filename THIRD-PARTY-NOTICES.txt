@@ -1,0 +1,33 @@
+선웅 Fan Studio third-party notices
+
+PA120 DIGITAL wire-format and physical LED layout references:
+https://github.com/Lexonight1/thermalright-trcc-linux/blob/main/doc/PROTOCOL_USBLED.md
+https://github.com/Lexonight1/thermalright-trcc-linux/blob/main/src/trcc/core/led_protocol.py
+https://github.com/Lexonight1/thermalright-trcc-linux/blob/main/src/trcc/services/led_segment.py
+The original C# sender/rendering logic in Fan Studio is implemented for this user's observed PA120 model using these protocol/layout facts. Thermalright's proprietary TRCC executable and assets are not copied into Fan Studio. Existing TRCC is only opened on request.
+
+LibreHardwareMonitorLib 0.9.6 — Mozilla Public License 2.0.
+Copyright LibreHardwareMonitor contributors and original Open Hardware Monitor contributors.
+Unmodified NuGet package. Source for the bundled version:
+https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/tree/v0.9.6
+https://www.nuget.org/packages/LibreHardwareMonitorLib/0.9.6
+License copy: licenses/LibreHardwareMonitor-LICENSE.txt.
+
+OpenRGB 1.1 Windows x64 (8e16de2) — GPL-2.0-or-later.
+Copyright Adam Honse and OpenRGB contributors. Separate unmodified executable communicating over TCP.
+Original archive: https://codeberg.org/OpenRGB/OpenRGB/releases/download/release_1.1/OpenRGB_1.1_Windows_64_8e16de2.zip
+Corresponding source: https://codeberg.org/OpenRGB/OpenRGB/src/tag/release_1.1
+Release source archive: https://codeberg.org/OpenRGB/OpenRGB/archive/release_1.1.tar.gz
+License copy: licenses/OpenRGB-LICENSE.txt. Qt and other engine libraries remain unmodified.
+Qt 6: LGPLv3/GPL/commercial, https://www.qt.io/licensing/
+Sources: https://download.qt.io/archive/qt/6.8/ (exact bundled version recorded in validation metadata).
+hidapi/libusb: upstream licenses and source links recorded in licenses/DEPENDENCIES.txt.
+
+PawnIO_setup.exe 2.2.0 — unmodified official signed installer by namazso.
+https://github.com/namazso/PawnIO.Setup/releases/tag/2.2.0
+https://github.com/namazso/PawnIO
+The installer includes its license terms. It is only launched by explicit user button action.
+
+NuGet transitive dependencies are listed in licenses/nuget-packages.txt with their metadata and upstream license URLs.
+.NET 8 Windows Desktop Runtime is provided by Microsoft and is not bundled in this framework-dependent build.
+This is a personal local build, not an official ASRock/NVIDIA/AMD/OpenRGB product.

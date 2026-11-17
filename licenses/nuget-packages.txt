@@ -1,0 +1,137 @@
+
+Package    : BlackSharp.Core/1.0.7
+License    : MPL-2.0
+LicenseUrl : https://licenses.nuget.org/MPL-2.0
+Project    : https://github.com/Blacktempel/BlackSharp
+
+Package    : DiskInfoToolkit/1.1.2
+License    : MPL-2.0
+LicenseUrl : https://licenses.nuget.org/MPL-2.0
+Project    : https://github.com/Blacktempel/DiskInfoToolkit
+
+Package    : HidSharp/2.6.4
+License    : LICENSE.txt
+LicenseUrl : https://aka.ms/deprecateLicenseUrl
+Project    : https://software.seekye.com/hidsharp
+
+Package    : LibreHardwareMonitorLib/0.9.6
+License    : MPL-2.0
+LicenseUrl : https://licenses.nuget.org/MPL-2.0
+Project    : https://github.com/LibreHardwareMonitor/LibreHardwareMonitor
+
+Package    : Mono.Posix.NETStandard/1.0.0
+License    : 
+LicenseUrl : https://go.microsoft.com/fwlink/?linkid=869050
+Project    : https://go.microsoft.com/fwlink/?linkid=869051
+
+Package    : RAMSPDToolkit-NDD/1.4.2
+License    : MPL-2.0
+LicenseUrl : https://licenses.nuget.org/MPL-2.0
+Project    : https://github.com/Blacktempel/RAMSPDToolkit
+
+Package    : runtime.android-arm.runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : runtime.android-arm64.runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : runtime.android-x64.runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : runtime.android-x86.runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : runtime.linux-arm.runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : runtime.linux-arm64.runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : runtime.linux-bionic-arm64.runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : runtime.linux-bionic-x64.runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : runtime.linux-musl-arm.runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : runtime.linux-musl-arm64.runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : runtime.linux-musl-x64.runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : runtime.linux-x64.runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : runtime.maccatalyst-arm64.runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : runtime.maccatalyst-x64.runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : runtime.osx-arm64.runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : runtime.osx-x64.runtime.native.System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : System.CodeDom/10.0.2
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : System.IO.Ports/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : System.Management/10.0.2
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+Package    : System.Threading.AccessControl/10.0.3
+License    : MIT
+LicenseUrl : https://licenses.nuget.org/MIT
+Project    : https://dot.net/
+
+

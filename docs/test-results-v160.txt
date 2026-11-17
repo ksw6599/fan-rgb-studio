@@ -1,0 +1,39 @@
+PASS all curves remain monotonic, >=30%, <=100%
+PASS 85C overrides manual duty, including lowest setting
+PASS cool temperatures retain the first curve point
+PASS invalid temperature requests maximum cooling
+PASS hardware duty bounds are honored
+PASS missing CPU never falls back to unrelated sensors
+PASS fractional manual duty survives input, preferences and worker commands
+PASS custom temperature points interpolate and retain all thermal safeguards
+PASS invalid custom curves cannot create unsafe temperature ranges
+PASS per-channel custom curves survive worker JSON and saved profile restart
+PASS RGB profiles persist per-device settings, zone precedence and fresh device indices
+PASS restarted RGB profile sends saved calibrated color and brightness over TCP
+PASS RGB restore preflight prevents all writes for stale zones or unrelated hardware
+PASS RGB startup retries delayed detection, confirms once and respects user overrides
+PASS SDK3 fixture parses device, mode and LEDs
+PASS truncated and oversized controller data rejected
+PASS fragmented real TCP frames, mode colors, brightness and readback
+PASS device identity change causes zero RGB writes
+PASS case-fan zones retain names, LED offsets and ARGB grouping
+PASS zone SDK packet updates only the requested header
+PASS invalid header is rejected before any mode or LED write
+PASS zero brightness on one header leaves other header lit
+PASS native effect without color support sends MODE_COLORS_NONE
+PASS native effect without per-LED colors cannot target one header
+PASS explicit upgrade session restores only verified channels and duty
+PASS invalid upgrade duty cannot issue a fan command
+PASS durable fan profile retains exact per-channel requests across restart and thermal override
+PASS saved fan settings reject changed hardware, bounds, duplicates and corrupt files
+PASS ASRock USB header Direct requests use native Static and preserve other headers
+PASS LED calibration reduces green without changing input hue code or double scaling brightness
+PASS PA120 physical mapping is a complete permutation of 84 LEDs
+PASS PA120 initialization matches TRCC 2.1.8.2 and rejects unrelated replies
+PASS PA120 42C, 100 percent and missing data have distinct numeric masks
+PASS PA120 HID reports carry report ID, exact header, scaling and zero padding
+PASS PA120 disabled metrics and zero brightness send no LEDs
+PASS display telemetry selects CPU package and discrete GPU core, not hotspot
+PASS v1.0 preferences remain readable with v1.1 display defaults
+PASS bundled OpenRGB 1.1 SDK negotiation and zero-device response (--nodetect)
+38 passed; 0 failed. Hardware writes were not performed by these tests.
